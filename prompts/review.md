@@ -39,7 +39,6 @@
 - 引き継ぎ事項
 
 ## リポジトリ情報の参照
-- 差分、承認済み実装指示書、テスト結果との整合性確認に必要な範囲で参照する。
-- 全体仕様や設計方針が必要な場合は `docs/reference/project-contexts/the-caption.txt` と `README.md` / `docs/reference/system.md` / `docs/reference/logic.md` の必要箇所を確認する。
-- 特定ファイル、局所差分、AI制御文書のレビューでは、対象ファイルと必要な近傍規約を優先する。
-- 参照文書を根拠に、レビュー対象外の改善・仕様追加・範囲拡張を要求しない。
+- リポジトリ全体・仕様・設計・実装方針を扱う場合は、`docs/reference/project-contexts/the-caption.txt` と必要な正本（`README.md` / `docs/reference/system.md` / `docs/reference/logic.md`）を読む。
+- 特定ファイル・局所差分・AI制御文書を扱う場合は、対象ファイルと必要な近傍規約を優先する。
+- 参照文書は明示された対象・範囲・観点の照合にだけ使い、未指定の境界補完、対象外改善、仕様追加、範囲拡張に使わない。
