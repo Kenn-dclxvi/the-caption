@@ -1,0 +1,439 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Sequence
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT = SCRIPT_DIR.parents[1]
+DELIVERY_STATE_PATH = ROOT / "data" / "runtime" / "sp" / "latest.json"
+
+
+class StepError(Exception):
+    def __init__(self, message: str, failure_kind: str | None = None):
+        super().__init__(message)
+        self.failure_kind = failure_kind
+
+
+STAGE_CANDIDATES = (
+    "AGENTS.md",
+    "README.md",
+    "docs",
+    "tests",
+    ".gitignore",
+    "src",
+    "scripts",
+)
+
+PHASE_FAILURE_KIND = {
+    "LOCAL_PREP": "local_prep_failed",
+    "REMOTE_PUBLICATION": "remote_publication_failed",
+    "POST_PUBLICATION_CLEANUP": "post_publication_cleanup_failed",
+}
+
+
+def current_branch(run_capture) -> str:
+    branch = run_capture(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=ROOT).strip()
+    if not branch:
+        raise StepError("failed to detect current branch")
+    return branch
+
+
+def detect_base_branch() -> str:
+    probe = subprocess.run(
+        ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+    if probe.returncode == 0:
+        ref = probe.stdout.strip()
+        if ref.startswith("refs/remotes/origin/"):
+            return ref.split("/")[-1]
+    return "main"
+
+
+def require_command(name: str):
+    if shutil.which(name) is None:
+        raise StepError(f"required command not found: {name}")
+
+
+def run(cmd: Sequence[str], cwd: Path, env=None):
+    result = subprocess.run(
+        cmd,
+        cwd=cwd,
+        text=True,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if result.returncode != 0:
+        raise StepError(f"command failed ({result.returncode}): {' '.join(cmd)}")
+
+
+def run_capture(cmd: Sequence[str], cwd: Path) -> str:
+    result = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise StepError(f"command failed ({result.returncode}): {' '.join(cmd)} {detail}")
+    return result.stdout
+
+
+def has_pending_stage_changes(run_capture, stage_candidates: Sequence[str]) -> bool:
+    if not stage_candidates:
+        return False
+    status = run_capture(
+        ["git", "status", "--porcelain", "--untracked-files=normal", "--", *stage_candidates],
+        cwd=ROOT,
+    ).strip()
+    return bool(status)
+
+
+def current_head(run_capture) -> str:
+    head = run_capture(["git", "rev-parse", "HEAD"], cwd=ROOT).strip()
+    if not head:
+        raise StepError("failed to resolve current HEAD")
+    return head
+
+
+def load_delivery_state() -> dict[str, Any] | None:
+    if not DELIVERY_STATE_PATH.is_file():
+        return None
+    try:
+        payload = json.loads(DELIVERY_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def write_delivery_state(payload: dict[str, Any]) -> None:
+    try:
+        DELIVERY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        DELIVERY_STATE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        return
+
+
+def emit_markdown_result(status_line: str, *, status: str, commit: str, branch: str, pr: str, message: str) -> None:
+    print(status_line)
+    print("### 実行結果")
+    print(f"- 状態: `{status}`")
+    print(f"- コミット: `{commit}`")
+    print(f"- ブランチ: `{branch}`")
+    print(f"- PR: `{pr}`")
+    print(f"- メッセージ: `{message}`")
+
+
+def format_failure_message(context: dict[str, Any], error: Exception) -> str:
+    parts = []
+    failure_phase = context.get("failure_phase")
+    failure_kind = context.get("failure_kind")
+    if failure_phase:
+        parts.append(f"工程={failure_phase}")
+    if failure_kind:
+        parts.append(f"種別={failure_kind}")
+    parts.append(f"理由={error}")
+    return " ".join(parts)
+
+
+def result_fields(context: dict[str, Any], *, status: str, message: str) -> dict[str, str]:
+    commit = str(context.get("merged_commit_sha") or context.get("commit_sha") or context.get("head") or "-")
+    branch = str(context.get("work_branch") or context.get("base_branch") or "-")
+    pr = str(context.get("pr_url") or "-")
+    return {
+        "status": status,
+        "commit": commit,
+        "branch": branch,
+        "pr": pr,
+        "message": message,
+    }
+
+
+def commit_changes(
+    context,
+    *,
+    root: Path,
+    stage_candidates: Sequence[str],
+    current_branch,
+    detect_base_branch,
+    run,
+    run_capture,
+    StepError,
+):
+    branch = context["work_branch"]
+    base_branch = context["base_branch"]
+    if branch == base_branch:
+        branch = f"codex/sp-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        run(["git", "switch", "-c", branch], cwd=root)
+        context["work_branch"] = branch
+        context["created_branch"] = True
+
+    stage_paths = []
+    for rel in stage_candidates:
+        if (root / rel).exists():
+            stage_paths.append(rel)
+    if not stage_paths:
+        raise StepError("no stage targets found")
+    run(["git", "add", "--", *stage_paths], cwd=root)
+    staged_diff = subprocess.run(
+        ["git", "diff", "--cached", "--quiet"],
+        cwd=root,
+        text=True,
+    )
+    if staged_diff.returncode == 0:
+        raise StepError("no staged changes to commit")
+    if staged_diff.returncode not in (0, 1):
+        raise StepError("failed to inspect staged changes")
+
+    message = os.environ.get("SP_COMMIT_MESSAGE", "").strip()
+    if not message:
+        message = "chore: automated sp delivery"
+    run(["git", "commit", "-m", message], cwd=root)
+    commit_sha = run_capture(["git", "rev-parse", "HEAD"], cwd=root).strip()
+    if not commit_sha:
+        raise StepError("failed to resolve commit SHA")
+    context["commit_sha"] = commit_sha
+
+
+def push_branch(context, *, root: Path, run):
+    run(["git", "push", "-u", "origin", context["work_branch"]], cwd=root)
+
+
+def create_pull_request(context, *, root: Path, run, run_capture, require_command, StepError):
+    require_command("gh")
+    commit_subject = run_capture(["git", "log", "-1", "--pretty=%s"], cwd=root).strip()
+    if not commit_subject:
+        commit_subject = "chore: automated sp delivery"
+    pr_body = (
+        "Automated delivery via ./sp.py\n\n"
+        "- commit\n"
+        "- push\n"
+        "- merge\n"
+        "- post publication cleanup (branch delete)"
+    )
+    run(
+        [
+            "gh",
+            "pr",
+            "create",
+            "--base",
+            context["base_branch"],
+            "--head",
+            context["work_branch"],
+            "--title",
+            commit_subject,
+            "--body",
+            pr_body,
+        ],
+        cwd=root,
+    )
+    pr_url = run_capture(
+        ["gh", "pr", "view", context["work_branch"], "--json", "url", "--jq", ".url"],
+        cwd=root,
+    ).strip()
+    if not pr_url:
+        raise StepError("failed to resolve created PR URL")
+    context["pr_url"] = pr_url
+
+
+def merge_pull_request(context, *, root: Path, run, run_capture, require_command, StepError):
+    require_command("gh")
+    pr_url = context.get("pr_url")
+    if not pr_url:
+        raise StepError("missing PR URL")
+    run(["gh", "pr", "merge", pr_url, "--squash"], cwd=root)
+    run(["git", "fetch", "origin", "--prune"], cwd=root)
+    run(["git", "switch", context["base_branch"]], cwd=root)
+    run(["git", "pull", "--ff-only", "origin", context["base_branch"]], cwd=root)
+    merged_commit_sha = run_capture(["git", "rev-parse", "HEAD"], cwd=root).strip()
+    if not merged_commit_sha:
+        raise StepError("failed to resolve merged commit SHA")
+    context["merged_commit_sha"] = merged_commit_sha
+
+
+def delete_branch(context, *, root: Path, run, StepError):
+    if not context.get("created_branch", False):
+        return
+
+    branch = context["work_branch"]
+    base_branch = context["base_branch"]
+    if branch == base_branch:
+        return
+
+    remote_delete = subprocess.run(
+        ["git", "push", "origin", "--delete", branch],
+        cwd=root,
+        text=True,
+        capture_output=True,
+    )
+    if remote_delete.returncode != 0:
+        if "remote ref does not exist" not in (remote_delete.stderr or ""):
+            raise StepError(f"remote branch delete failed: {remote_delete.stderr.strip()}")
+
+    local_delete = subprocess.run(
+        ["git", "branch", "-D", branch],
+        cwd=root,
+        text=True,
+        capture_output=True,
+    )
+    if local_delete.returncode != 0:
+        if "not found" not in (local_delete.stderr or ""):
+            raise StepError(f"local branch delete failed: {local_delete.stderr.strip()}")
+
+
+def skip_redundant_delivery(run_capture, head: str | None = None) -> str | None:
+    latest = load_delivery_state()
+    if not latest:
+        return None
+
+    if head is None:
+        try:
+            head = current_head(run_capture)
+        except StepError:
+            return None
+
+    latest_head = str(latest.get("head", "") or "").strip()
+    if not latest_head or latest_head != head:
+        return None
+
+    if has_pending_stage_changes(run_capture, STAGE_CANDIDATES):
+        return None
+
+    return "既に配信済み"
+
+
+def _step_commit(context):
+    return commit_changes(
+        context,
+        root=ROOT,
+        stage_candidates=STAGE_CANDIDATES,
+        current_branch=current_branch,
+        detect_base_branch=detect_base_branch,
+        run=run,
+        run_capture=run_capture,
+        StepError=StepError,
+    )
+
+
+def _step_push(context):
+    return push_branch(context, root=ROOT, run=run)
+
+
+def _step_pr(context):
+    return create_pull_request(
+        context,
+        root=ROOT,
+        run=run,
+        run_capture=run_capture,
+        require_command=require_command,
+        StepError=StepError,
+    )
+
+
+def _step_merge(context):
+    return merge_pull_request(
+        context,
+        root=ROOT,
+        run=run,
+        run_capture=run_capture,
+        require_command=require_command,
+        StepError=StepError,
+    )
+
+
+def _step_delete_branch(context):
+    return delete_branch(context, root=ROOT, run=run, StepError=StepError)
+
+
+def main():
+    context = {
+        "base_branch": detect_base_branch(),
+        "work_branch": None,
+        "created_branch": False,
+        "commit_sha": None,
+        "pr_url": None,
+        "merged_commit_sha": None,
+        "head": None,
+        "current_phase": None,
+        "completed_phases": [],
+        "failure_phase": None,
+        "failure_kind": None,
+    }
+
+    try:
+        context["work_branch"] = current_branch(run_capture)
+        head = current_head(run_capture)
+        context["head"] = head
+        skip_reason = skip_redundant_delivery(run_capture, head=head)
+        if skip_reason is not None:
+            emit_markdown_result(
+                "[SP] SKIP",
+                **result_fields(context, status="SKIP", message=skip_reason),
+            )
+            return
+
+        phase_plan = [
+            ("LOCAL_PREP", [("COMMIT", _step_commit)]),
+            (
+                "REMOTE_PUBLICATION",
+                [
+                    ("PUSH", _step_push),
+                    ("PR", _step_pr),
+                    ("MERGE", _step_merge),
+                ],
+            ),
+            ("POST_PUBLICATION_CLEANUP", [("BRANCH_DELETE", _step_delete_branch)]),
+        ]
+
+        for phase_name, steps in phase_plan:
+            context["current_phase"] = phase_name
+            for name, func in steps:
+                try:
+                    func(context)
+                except StepError as e:
+                    failure_kind = e.failure_kind or PHASE_FAILURE_KIND[phase_name]
+                    context["failure_phase"] = phase_name
+                    context["failure_kind"] = failure_kind
+                    raise
+            context["completed_phases"].append(phase_name)
+
+        write_delivery_state(
+            {
+                "head": context.get("merged_commit_sha") or current_head(run_capture),
+                "base_branch": context.get("base_branch"),
+                "work_branch": context.get("work_branch"),
+                "commit_sha": context.get("commit_sha"),
+                "merged_commit_sha": context.get("merged_commit_sha"),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        context["head"] = context.get("merged_commit_sha") or current_head(run_capture)
+        emit_markdown_result(
+            "[SP] SUCCESS",
+            **result_fields(context, status="SUCCESS", message="配信処理を完了しました"),
+        )
+    except StepError as e:
+        emit_markdown_result(
+            "[SP] FAILED",
+            **result_fields(context, status="FAILED", message=format_failure_message(context, e)),
+        )
+        raise SystemExit(1)
+    except Exception as e:
+        emit_markdown_result(
+            "[SP] FAILED",
+            **result_fields(context, status="FAILED", message=format_failure_message(context, e)),
+        )
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

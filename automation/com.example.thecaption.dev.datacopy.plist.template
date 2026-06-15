@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.example.thecaption.dev.datacopy</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>$HOME/repos/the-caption-dev/automation/backup.sh</string>
+        <string>dev</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>35</integer>
+    </dict>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/com.example.thecaption.dev.datacopy.err</string>
+  
+    <key>StandardOutPath</key>
+    <string>/tmp/com.example.thecaption.dev.datacopy.out</string>
+</dict>
+</plist>

@@ -1,0 +1,90 @@
+<core_context>
+  <role>Static context for Codex/Claude execution.</role>
+  <scope>Project facts only (project/commands/architecture/environment/testing).</scope>
+  <behavior>MUST NOT define or override persona/workflow/constraints.</behavior>
+  <source_of_truth>docs/reference/project-contexts/the-caption.txt</source_of_truth>
+</core_context>
+
+<project>
+  <name>THE CAPTION (v4.0 "Collection-Primary")</name>
+  <purpose>Automated financial reporting with a Collection-primary canonical ledger, Broker audit, weekly/monthly summaries, and v4 monolithic daily mail</purpose>
+  <entries>
+    <entry name="v4_daily" path="src/app/entrypoints/v4_daily_main.py">v4 canonical daily report entrypoint</entry>
+    <entry name="weekly" path="src/app/entrypoints/weekly_main.py">weekly summary entrypoint</entry>
+    <entry name="monthly" path="src/app/entrypoints/monthly_main.py">monthly summary entrypoint</entry>
+  </entries>
+  <docs_path>docs/_index.md</docs_path>
+  <howto_path>docs/how-to/index.md</howto_path>
+</project>
+
+<commands>
+  <category name="Environment">
+    <command>source .venv/bin/activate</command>
+    <command>.venv\Scripts\activate</command>
+  </category>
+  <category name="Delivery">
+    <command>scripts/dev/sp</command>
+  </category>
+  <category name="V4 Daily">
+    <command>python -m src.app.entrypoints.v4_daily_main</command>
+    <command>python -m src.app.entrypoints.v4_daily_main -o -F</command>
+    <command>python scripts/dev/run_shadow_ingester.py</command>
+  </category>
+  <references>
+    <ref>README.md / src/AGENTS.md / scripts/AGENTS.md / tests/AGENTS.md / docs/AGENTS.md for extended run/build/test variants.</ref>
+  </references>
+</commands>
+
+<architecture>
+  <layers>
+    <layer name="Logic">src/app/v4_engine.py / src/domain/universal_ingester.py / src/app/monthly_engine.py</layer>
+    <layer name="Infra">src/infra/browser_manager.py / src/infra/broker_client.py / src/infra/llm_transporter.py / src/infra/mail_sender.py</layer>
+    <layer name="View">src/app/renderer/</layer>
+  </layers>
+  <domain_isolation>
+    <isolation domain="V4">src/app/v4_engine.py -&gt; UniversalIngester / MarketCurator / V4ContentRenderer / MailSender</isolation>
+    <isolation domain="COLLECTION">data/collection/market_units.csv is v4 SSOT A; collection_engine.py retired to legacy/v3/</isolation>
+  </domain_isolation>
+  <key_modules>
+    <module name="universal_ingester.py">v4 dual-input SSOT ingester; writes ShadowLedger</module>
+    <module name="ledger_schema.py">ShadowLedger and legacy ledger schemas</module>
+    <module name="v4_engine.py">v4 daily orchestration</module>
+    <module name="v4_content_renderer.py">v4 monolithic HTML rendering facade</module>
+    <module name="monthly_curator.py">legacy monthly chronicle plus v4 ShadowLedger monthly chronicle generation</module>
+    <module name="templates/v4_chronicle.html">v4 Slate Symphony monthly HTML template</module>
+    <module name="guard_rail.py">daily send lock check and ShadowLedger dispatch gate</module>
+    <module name="curator.py">AI insight generation</module>
+    <module name="llm_transporter.py">LLM provider HTTP transport</module>
+    <module name="notifier.py">Renderer + MailSender facade</module>
+    <module name="renderer/view_models.py">view-model layer</module>
+    <module name="src/config/settings.py">runtime settings + env load</module>
+    <module name="src/config/prompts.py">Curator/Chronicle prompt defs</module>
+    <module name="src/lib/logger.py">structured logging helper</module>
+  </key_modules>
+  <canonical_data>
+    <source name="SSOT_A" path="data/collection/market_units.csv">canonical market-linked units for stocks, mutual funds, commodities, and FX helper rows</source>
+    <source name="SSOT_A_SNAPSHOT" path="data/current/collection_units_YYYYMMDD.json">date-specific FULL_SNAPSHOT for recompute/audit/backfill input fixation; runtime never falls back to data/collection/funds.csv</source>
+    <source name="SSOT_B" path="data/external_assets.json">absolute JPY amounts for cash and external assets; monthly key preferred, default fallback</source>
+    <output name="CanonicalLedger" path="data/v4_shadow_ledger.json">flat ShadowAssetRecord list with total_value_jpy</output>
+  </canonical_data>
+</architecture>
+
+<feature_decision_map>
+  <rule topic="daily_mail">v4 daily mail changes target src/app/v4_engine.py, src/app/renderer/, and v4 view models.</rule>
+  <rule topic="ledger">Asset valuation and canonical totals belong to UniversalIngester, ledger_schema, and ShadowLedger finalization. Renderer must not recompute ledger facts.</rule>
+  <rule topic="collection">data/collection/market_units.csv is v4 SSOT A. collection_engine.py and collection_main.py have been retired to legacy/v3/ and are not the v4 canonical path.</rule>
+  <rule topic="monthly">Monthly v4 chronicle changes target monthly_curator, daily_metrics inputs, and v4_chronicle template. Portfolio Audit belongs to monthly flow, not daily flow.</rule>
+  <rule topic="ai_prompt">Curator/Chronicle prompt changes target src/config/prompts.py and docs/reference/prompts.md. Keep system instructions separate from user data tags.</rule>
+  <rule topic="view">Display-only changes belong to src/app/renderer/, including templates and view-model modules. View changes must not alter ledger generation or SSOT semantics.</rule>
+</feature_decision_map>
+
+<environment>
+  <load_order>secret.key + .env.enc (Fernet decrypt) -&gt; fallback .env</load_order>
+  <gitignored>never commit: .env / .env.enc / secret.key / auth/ / data/ / logs/</gitignored>
+  <llm_priority>ANTHROPIC_API_KEY (Primary) -&gt; GOOGLE_API_KEY (Secondary) -&gt; DEEPSEEK_API_KEY (Backup)</llm_priority>
+  <reference>src/config/settings.py</reference>
+</environment>
+
+<testing>
+  <hook id="PRE_COMMIT_ENFORCEMENT">.git/hooks/pre-commit enforces the repo verification baseline.</hook>
+</testing>

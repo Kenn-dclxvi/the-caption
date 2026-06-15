@@ -1,0 +1,49 @@
+name: Docs Canonical Command Guard
+
+on:
+  pull_request:
+    paths:
+      - "README.md"
+      - "docs/2.How-to_Guides.md"
+      - "docs/how-to/index.md"
+      - ".github/workflows/docs-canonical-command-guard.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "README.md"
+      - "docs/2.How-to_Guides.md"
+      - "docs/how-to/index.md"
+      - ".github/workflows/docs-canonical-command-guard.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  block-legacy-tools-commands:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure docs use scripts/dev commands
+        run: |
+          set -euo pipefail
+
+          files=(
+            "README.md"
+            "docs/2.How-to_Guides.md"
+            "docs/how-to/index.md"
+          )
+
+          failed=0
+          for file in "${files[@]}"; do
+            if grep -nE '^[[:space:]]*python tools/' "$file"; then
+              echo "::error file=${file}::Legacy command detected. Use python scripts/dev/... instead."
+              failed=1
+            fi
+          done
+
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi

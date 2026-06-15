@@ -1,0 +1,29 @@
+@import url("https://fonts.googleapis.com/css2?family=Work+Sans:wght@100;200;300;400;500;700;800&display=swap");
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Work Sans", ui-sans-serif, system-ui, sans-serif;
+  --color-ink: #1e293b;
+  --color-mist: #64748b;
+  --color-echo: #cbd5e1;
+  --color-gold: #c5a059;
+  --color-substrate: #f8fafc;
+}
+
+@layer utilities {
+  .truncate-guard {
+    max-width: 240px;
+    overflow: hidden;
+    white-space: nowrap;
+    position: relative;
+  }
+  .truncate-guard::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background-color: var(--color-echo);
+  }
+}

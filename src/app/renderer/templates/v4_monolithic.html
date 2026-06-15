@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ja">
+<body style="margin:0; padding:0; background-color:#ffffff; font-family:-apple-system,BlinkMacSystemFont,sans-serif; -webkit-font-smoothing:antialiased;">
+  <div style="max-width:440px; margin:auto; padding:45px 24px;">
+
+    {% if vm.show_appraisal %}
+    <div style="margin-bottom:60px;">
+      <div style="font-size:18px; color:{{ c_slate }}; letter-spacing:0.15em; margin-bottom:10px; text-transform:uppercase; font-weight:300; line-height:1.4;">{{ vm.theme_title }}</div>
+      {% if vm.theme_subtitle %}
+      <div style="font-size:13px; font-weight:300; line-height:1.8; color:{{ c_slate }}; letter-spacing:0.08em; font-feature-settings:'palt'; margin-bottom:22px;">{{ vm.theme_subtitle }}</div>
+      {% endif %}
+      <div style="font-size:11px; font-weight:300; line-height:1.4; color:{{ c_slate }}; letter-spacing:0.1em; text-transform:uppercase; margin-bottom:8px;">State / Primary</div>
+      <div style="font-size:18px; font-weight:300; line-height:1.5; color:{{ c_ink }}; letter-spacing:0.05em; text-transform:uppercase;">{{ vm.state_label }} / {{ vm.primary_force }}</div>
+    </div>
+    {% endif %}
+
+    <div style="margin-bottom:60px;">
+      <div style="margin-bottom:24px;">
+        <div style="font-size:18px; color:{{ c_slate }}; letter-spacing:0.15em; margin-bottom:8px; text-transform:uppercase; font-weight:300; line-height:1.4;">Safe Ratio</div>
+        <div style="font-size:60px; font-weight:100; color:{{ c_ink }}; line-height:1.0; letter-spacing:-0.04em; margin-left:-2px;">{{ vm.fmt_safe_ratio }}</div>
+      </div>
+
+      <div style="margin-bottom:24px; width:100%;">
+        <div style="width:100%; height:12px; background-color:#f1f5f9; overflow:hidden; display:flex;">
+          <div style="width:{{ vm.exposure_width_pct }}%; display:flex;">
+            <div style="width:{{ vm.slate_share }}%; background-color:{{ c_slate }};"></div>
+            <div style="width:{{ vm.gold_share }}%; background-color:{{ c_gold }};"></div>
+          </div>
+          <div style="width:2px; background-color:#ffffff;"></div>
+          <div style="width:{{ vm.safe_ratio_pct }}%; background-color:{{ c_silver }};"></div>
+        </div>
+      </div>
+
+      <table border="0" cellpadding="0" cellspacing="0" style="width:100%; margin-bottom:48px;">
+        <tr>
+          <td style="width:33%; vertical-align:top;">
+            <div style="font-size:11px; color:{{ c_slate }}; letter-spacing:0.05em; text-transform:uppercase; margin-bottom:4px;">Exposure</div>
+            <div style="font-size:20px; color:{{ c_ink }}; font-weight:200; letter-spacing:-0.02em;">{{ vm.fmt_exposure }}</div>
+          </td>
+          <td style="width:34%; vertical-align:top; text-align:center;">
+            <div style="font-size:11px; color:{{ c_slate }}; letter-spacing:0.05em; text-transform:uppercase; margin-bottom:4px;">Iron Bank</div>
+            <div style="font-size:20px; color:{{ c_ink }}; font-weight:200; letter-spacing:-0.02em;">{{ vm.fmt_iron_bank }}</div>
+          </td>
+          <td style="width:33%; vertical-align:top; text-align:right;">
+            <div style="font-size:11px; color:{{ c_slate }}; letter-spacing:0.05em; text-transform:uppercase; margin-bottom:4px;">Total Return</div>
+            <div style="font-size:20px; color:{{ vm.total_pl_color }}; font-weight:200; letter-spacing:-0.02em;">{{ vm.total_return_anchor }}</div>
+          </td>
+        </tr>
+      </table>
+
+      <div style="border-left:1px solid {{ c_silver }}; padding-left:32px; margin-left:4px; margin-bottom:24px;">
+        <div style="font-size:13px; color:{{ c_slate }}; letter-spacing:0.15em; margin-bottom:6px; font-weight:300; text-transform:uppercase;">Total Net Assets</div>
+        <div style="font-size:40px; font-weight:100; color:{{ c_ink }}; margin-bottom:16px; line-height:1.0; letter-spacing:-0.02em; margin-left:-2px;">{{ vm.fmt_total_net_assets }}</div>
+        <div style="font-size:12px; font-weight:300; letter-spacing:0.05em; color:{{ c_slate }}; line-height:1.8;">
+          <span style="white-space:nowrap; color:{{ c_slate }};"><span style="color:{{ c_slate }};">YTD</span>&nbsp;&nbsp;<span style="color:{{ c_slate }};">{{ vm.ytd_anchor }}</span></span>&nbsp;&nbsp;&nbsp;&nbsp;
+          <span style="white-space:nowrap; color:{{ c_slate }};"><span style="color:{{ c_slate }};">MTD</span>&nbsp;&nbsp;<span style="color:{{ c_slate }};">{{ vm.total_mtd }}</span></span>&nbsp;&nbsp;&nbsp;&nbsp;
+          <span style="white-space:nowrap; color:{{ c_slate }};"><span style="color:{{ c_slate }};">WTD</span>&nbsp;&nbsp;<span style="color:{{ c_slate }};">{{ vm.total_wtd }}</span></span>
+          <div style="white-space:nowrap; color:{{ c_slate }}; font-size:12px; font-weight:300; letter-spacing:0.05em; line-height:1.8; margin-top:2px;"><span style="color:{{ c_slate }};">DAY</span>&nbsp;&nbsp;<span style="color:{{ vm.day_color }};">{{ vm.fmt_total_day }}</span> <span style="font-size:11px; margin:0 4px; color:{{ c_slate }};">/</span> <span style="color:{{ vm.day_color }};">{{ vm.fmt_total_day_pct }}</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-bottom:60px;">
+      <div style="font-size:18px; color:{{ c_slate }}; letter-spacing:0.15em; margin-bottom:24px; text-transform:uppercase; font-weight:300; line-height:1.4;">Exposure</div>
+      <div style="border-left:1px solid {{ c_silver }}; padding-left:32px; margin-left:4px;">
+        {% for row in vm.exposure_rows %}
+        <div style="margin-bottom:60px;">
+          <div style="font-size:13px; color:{{ c_slate }}; letter-spacing:0.15em; margin-bottom:6px; font-weight:300; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block; width:100%;">{{ row.name }}</div>
+          <div style="font-size:40px; font-weight:100; color:{{ row.value_color }}; margin-bottom:16px; line-height:1.0; letter-spacing:-0.02em; margin-left:-2px;">{{ row.fmt_value }}</div>
+          <div style="width:100%; height:2px; background-color:#f1f5f9; margin-bottom:16px;">
+            <div style="width:{{ row.share_pct }}%; height:2px; background-color:{{ c_slate }};"></div>
+          </div>
+          {% if row.fmt_units or row.fmt_price %}
+          <div style="font-size:12px; font-weight:300; letter-spacing:0.05em; color:{{ c_slate }}; line-height:1.8;">
+            {% if row.fmt_units %}
+            <span style="white-space:nowrap;"><span style="color:{{ c_slate }};">UNITS</span>&nbsp;&nbsp;{{ row.fmt_units }}</span>
+            {% endif %}
+            {% if row.fmt_units and row.fmt_price %}&nbsp;&nbsp;&nbsp;&nbsp;{% endif %}
+            {% if row.fmt_price %}
+            <span style="white-space:nowrap;"><span style="color:{{ c_slate }};">PRICE</span>&nbsp;&nbsp;{{ row.fmt_price }}</span>
+            {% endif %}
+          </div>
+          {% endif %}
+          <div style="font-size:12px; font-weight:300; letter-spacing:0.05em; color:{{ c_slate }}; line-height:1.8; margin-top:2px; {{ row.metrics_display_style }}">
+            <span style="white-space:nowrap;"><span style="color:{{ c_slate }};">YTD</span>&nbsp;&nbsp;{{ row.fmt_ytd }}</span>&nbsp;&nbsp;&nbsp;&nbsp;
+            <span style="white-space:nowrap;"><span style="color:{{ c_slate }};">MTD</span>&nbsp;&nbsp;{{ row.fmt_mtd }}</span>&nbsp;&nbsp;&nbsp;&nbsp;
+            <span style="white-space:nowrap;"><span style="color:{{ c_slate }};">WTD</span>&nbsp;&nbsp;{{ row.fmt_wtd }}</span>
+            <div style="white-space:nowrap; color:{{ c_slate }}; font-size:12px; font-weight:300; letter-spacing:0.05em; line-height:1.8; margin-top:2px;"><span style="color:{{ c_slate }};">DAY</span>&nbsp;&nbsp;<span style="color:{{ row.day_color }};">{{ row.fmt_day.split(' / ', 1)[0] }}</span>{% if ' / ' in row.fmt_day %}&nbsp;&nbsp;<span style="font-size:11px; color:{{ c_slate }};">/</span>&nbsp;&nbsp;<span style="color:{{ row.day_color }};">{{ row.fmt_day.split(' / ', 1)[1] }}</span>{% endif %}</div>
+          </div>
+          {% if row.day_detail_line %}
+          <div style="font-size:12px; font-weight:300; letter-spacing:0.05em; color:{{ c_slate }}; line-height:1.8; margin-top:2px;">
+            <span style="white-space:nowrap;">{{ row.day_detail_line }}</span>
+          </div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div style="margin-bottom:60px;">
+      <div style="font-size:18px; color:{{ c_slate }}; letter-spacing:0.15em; margin-bottom:24px; text-transform:uppercase; font-weight:300; line-height:1.4;">Iron Bank</div>
+      <div style="border-left:1px solid {{ c_silver }}; padding-left:32px; margin-left:4px;">
+        {% for row in vm.iron_bank_rows %}
+        <div style="margin-bottom:60px;">
+          <div style="font-size:13px; color:{{ c_slate }}; letter-spacing:0.15em; margin-bottom:6px; font-weight:300; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block; width:100%;">{{ row.name }}</div>
+          <div style="font-size:40px; font-weight:100; color:{{ row.value_color }}; margin-bottom:16px; line-height:1.0; letter-spacing:-0.02em; margin-left:-2px;">{{ row.fmt_value }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div style="margin-top:60px; border-top:1px solid #f8fafc; padding-top:24px;">
+      <p style="margin:0; font-size:9px; color:{{ c_silver }}; letter-spacing:0.1em; text-transform:uppercase;">{{ vm.footer_label }}</p>
+    </div>
+  </div>
+</body>
+</html>
