@@ -1,1 +1,1 @@
-__all__ = ["daily_main", "weekly_main", "monthly_main", "collection_main"]
+__all__ = ["v4_daily_main", "weekly_main", "monthly_main"]

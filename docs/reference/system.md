@@ -149,7 +149,7 @@ Broker 証券サイトからデータを取得する責務を以下の3層に分
 * **起動URL**: PRD は `http://localhost:3001`、DEV は `http://localhost:3101`。
 * **画面**: `Market Units` と `External Assets` を切り替えて編集する。
 * **UI アイコン**: ブラウザタブのアイコンには `images/MailIcon.png` を流用し、`src/web/market_units_editor/public/mail-icon.png` として配信する。
-* **永続化先**: `data/collection/market_units.csv` と `data/external_assets.json`。保存内容は次回の `collection_main` 実行にそのまま反映される。
+* **永続化先**: `data/collection/market_units.csv` と `data/external_assets.json`。保存内容のうち `market_units.csv` は SSOT A として、次回の v4 日次パイプライン `python -m src.app.entrypoints.v4_daily_main` 実行時に参照される。
 
 ### 2.3 Prompt Injection Guard (プロンプトインジェクション防御)
 

@@ -12,7 +12,7 @@ def test_content_renderer_uses_v4_monthly_only_for_schema_version() -> None:
     renderer._ContentRenderer__monthly.render = MagicMock(return_value="<legacy>")
 
     assert renderer.render_monthly(data, summary_vm) == "<v4>"
-    renderer._ContentRenderer__monthly.render_v4.assert_called_once_with(data)
+    renderer._ContentRenderer__monthly.render_v4.assert_called_once_with(data, summary_vm)
     renderer._ContentRenderer__monthly.render.assert_not_called()
 
 

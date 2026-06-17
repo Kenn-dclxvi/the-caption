@@ -9,4 +9,4 @@ This directory is the forward structure for new development.
 - `infra/`: infrastructure adapters and gateways
 - `lib/`: shared utilities
 
-Legacy modules remain in `modules/` until phased migration.
+Legacy v3 code has been moved to `legacy/v3/` during phased migration.
