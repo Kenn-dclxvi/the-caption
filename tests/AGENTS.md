@@ -1,7 +1,7 @@
-# tests rules
+# tests ルール
 
-- New tests belong under `tests/unit/` or `tests/integration/`.
-- Keep import and command guard coverage aligned with current canonical paths.
-- Legacy root entrypoints, legacy shims, and legacy import roots should stay blocked by tests.
-- Run `pytest tests/ -v` before requesting review.
-- Local pre-commit expectations should stay aligned with the same `pytest tests/ -v` baseline.
+- 新しいテストは `tests/unit/` または `tests/integration/` 配下に置く。
+- import とコマンドのガードカバレッジを、現行の正規パスと整合させて保つ。
+- レガシーのルートエントリポイント・レガシー shim・レガシー import ルートは、テストでブロックしたまま保つ。
+- レビュー依頼前に `pytest tests/ -v` を実行する。
+- ローカルの pre-commit 期待値は、同じ `pytest tests/ -v` のベースラインと整合させて保つ。
