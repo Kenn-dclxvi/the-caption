@@ -9,15 +9,22 @@ def _v4_monthly_data() -> dict:
     return {
         "chronicle": {
             "title": "静かな構造転換",
-            "overview": "一ヶ月の潮流を鑑定します。",
-            "structural_change": "ABSOLUTE_AMOUNTは市場要因から切り離して扱います。",
-            "shield_review": "防壁は中立に機能しました。",
+            "monthly_summary": "一ヶ月の潮流を鑑定します。",
+            "market_causality": "ABSOLUTE_AMOUNTは市場要因から切り離して扱います。",
+            "phase_analysis": ["月央にVIXが落ち着きました。"],
+            "asset_contribution": ["US_STOCKが寄与しました。"],
+            "portfolio_audit": "集中度と現金比率を確認します。",
+            "next_month_watch": ["VIX水準の継続観測"],
         },
         "meta": {
             "year_month": "2026-04",
             "ledger_days": 30,
             "total_change_jpy": 12000,
             "total_change_pct": 1.5,
+            "dominant_regime": "CALM",
+            "primary_causality": "TECH_DRIVEN",
+            "risk_temperature": "LOW",
+            "data_quality": "HAS_MISSING_PRICING",
             "asset_class_trends": [
                 {
                     "source": "MARKET_UNITS",
@@ -70,6 +77,7 @@ def test_render_v4_monthly_chronicle_uses_slate_symphony_template() -> None:
     assert "Market Regime" in html
     assert "Portfolio Movement" in html
     assert "Portfolio Audit" in html
+    assert "HAS_MISSING_PRICING" in html
     assert "MARKET_UNITS / 66.67% / +20,000 JPY" in html
     assert "ABSOLUTE_AMOUNT / 33.33% / +10,000 JPY" in html
     assert "font-weight:300" in html

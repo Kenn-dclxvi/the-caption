@@ -37,6 +37,34 @@ class MarketSnapshotRepository:
             logger.error(f"[Outcome] Failed to save {os.path.basename(path)}: {exc}")
             return False
 
+    def load_month(self, year_month: str) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        compact_prefix = year_month.replace("-", "")
+
+        if not os.path.isdir(DIR_CURRENT):
+            return records
+
+        for filename in sorted(os.listdir(DIR_CURRENT)):
+            if not (
+                filename.startswith(f"market_snapshot_{compact_prefix}")
+                and filename.endswith(".json")
+            ):
+                continue
+
+            path = os.path.join(DIR_CURRENT, filename)
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    payload = json.load(handle)
+                if isinstance(payload, dict):
+                    records.append(payload)
+                else:
+                    logger.warning(f"[V4] Skipping non-object market snapshot: {filename}")
+            except Exception as exc:
+                logger.warning(f"[V4] Skipping unreadable market snapshot: {filename} ({exc})")
+
+        records.sort(key=lambda row: str(row.get("target_date", "")))
+        return records
+
     def __get_path(self, target_date: str) -> str:
         filename = f"market_snapshot_{target_date.replace('-', '')}.json"
         return os.path.join(DIR_CURRENT, filename)

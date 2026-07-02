@@ -5,7 +5,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.domain.ledger_schema import ShadowAssetRecord, ShadowLedger
-from src.domain.monthly_curator import MonthlyCurator
+from src.domain.monthly_curator import (
+    MonthlyCurator,
+    V4ChronicleBannedWordsViolation,
+    V4ChronicleSchemaViolation,
+)
 
 
 def _load_real_prompts_module():
@@ -30,13 +34,37 @@ _PROMPT_CHRONICLE_SYSTEM_V4 = """
 </analytical_focus>
 """
 _OUTPUT_SCHEMA_CHRONICLE_V4 = {
+    "type": "object",
+    "required": ["chronicle", "meta"],
     "chronicle": {
         "title": "title",
-        "overview": "overview",
-        "structural_change": "structural_change",
-        "shield_review": "shield_review",
+        "monthly_summary": "monthly_summary",
+        "market_causality": "market_causality",
+        "phase_analysis": [],
+        "asset_contribution": [],
+        "portfolio_audit": "portfolio_audit",
+        "next_month_watch": [],
+    },
+    "meta": {
+        "dominant_regime": "dominant_regime",
+        "primary_causality": "primary_causality",
+        "fx_impact": "fx_impact",
+        "risk_temperature": "risk_temperature",
+        "data_quality": "data_quality",
     }
 }
+
+_MONTHLY_CHRONICLE_BANNED_WORDS = [
+    "静観",
+    "様子見",
+    "一旦",
+    "と思われる",
+    "一喜一憂",
+    "検討",
+    "見守り",
+    "ホールド",
+    "距離を置く",
+]
 
 
 def _ledger(day: str, stock_value: float, cash_value: float) -> ShadowLedger:
@@ -77,10 +105,20 @@ def _response() -> str:
         {
             "chronicle": {
                 "title": "静かな構造転換",
-                "overview": "月間の潮流を総括します。",
-                "structural_change": "現金は家計側の構造変化として扱います。",
-                "shield_review": "防壁は中立に機能しました。",
-            }
+                "monthly_summary": "月間の潮流を総括します。",
+                "market_causality": "市場要因はMARKET_UNITSに限定します。",
+                "phase_analysis": ["月央にVIXが落ち着きました。"],
+                "asset_contribution": ["US_STOCKが寄与しました。"],
+                "portfolio_audit": "現金は家計側の構造変化として扱います。",
+                "next_month_watch": ["VIX水準の継続観測"],
+            },
+            "meta": {
+                "dominant_regime": "CALM",
+                "primary_causality": "TECH_DRIVEN",
+                "fx_impact": "NEUTRAL",
+                "risk_temperature": "LOW",
+                "data_quality": "OK",
+            },
         }
     )
 
@@ -90,7 +128,7 @@ def test_generate_v4_chronicle_aggregates_dynamic_and_static_sources() -> None:
             patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
             patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
         transporter = mock_transporter_cls.return_value
-        transporter.generate.return_value = _response()
+        transporter.request_intelligence.return_value = _response()
         curator = MonthlyCurator()
 
         result = curator.generate_v4_chronicle(
@@ -105,6 +143,13 @@ def test_generate_v4_chronicle_aggregates_dynamic_and_static_sources() -> None:
                     "- **Archive Note**: Daily insight body"
                 ),
             }],
+            market_snapshots=[
+                {
+                    "target_date": "2026-04-15",
+                    "us_market": {"trading_date": "2026-04-14", "is_holiday": False},
+                    "market_summary": "S&P500: +0.10% | VIX: 18.00",
+                }
+            ],
         )
 
     assert result["chronicle"]["title"] == "静かな構造転換"
@@ -118,29 +163,39 @@ def test_generate_v4_chronicle_aggregates_dynamic_and_static_sources() -> None:
     assert daily_context["state_distribution"] == {"WATCH": 1}
     assert daily_context["causal_vectors"] == {"TECH_DRIVEN": 1}
     assert daily_context["monthly_tags"]["TECH_CONCENTRATION"] == 1
+    market_snapshot_summary = result["meta"]["market_snapshot_summary"]
+    assert market_snapshot_summary["snapshot_days"] == 1
+    assert market_snapshot_summary["daily_market_summaries"][0]["us_trading_date"] == "2026-04-14"
+    assert market_snapshot_summary["daily_market_summaries"][0]["market_observations"]["indices"]["S&P500"] == {
+        "change_pct": 0.1
+    }
+    assert market_snapshot_summary["daily_market_summaries"][0]["market_observations"]["vix"] == {
+        "level": 18.0,
+        "change": None,
+    }
 
-    transporter.generate.assert_called_once()
-    system_prompt, user_prompt, schema = transporter.generate.call_args[0]
-    assert system_prompt == _PROMPT_CHRONICLE_SYSTEM_V4
-    assert '<focus area="ABSOLUTE_AMOUNT">' in system_prompt
-    assert "市場因果とは切り離し" in system_prompt
-    assert schema == _OUTPUT_SCHEMA_CHRONICLE_V4
-    assert "<daily_insights>" in user_prompt
-    assert "<daily_context_summary>" in user_prompt
-    assert "<monthly_trend_data>" in user_prompt
-    assert "<output_schema>" in user_prompt
-    assert "MARKET_UNITS" in user_prompt
-    assert "ABSOLUTE_AMOUNT" in user_prompt
-    assert "Daily insight body" in user_prompt
-    assert "state_distribution" in user_prompt
+    transporter.request_intelligence.assert_called_once()
+    prompt = transporter.request_intelligence.call_args[0][0]
+    assert _PROMPT_CHRONICLE_SYSTEM_V4 in prompt
+    assert '<focus area="ABSOLUTE_AMOUNT">' in prompt
+    assert "市場因果とは切り離し" in prompt
+    assert json.dumps(_OUTPUT_SCHEMA_CHRONICLE_V4, ensure_ascii=False, indent=2) in prompt
+    assert "<daily_insights>" in prompt
+    assert "<daily_context_summary>" in prompt
+    assert "<monthly_trend_data>" in prompt
+    assert "<market_snapshot_summary>" in prompt
+    assert "<output_schema>" in prompt
+    assert "MARKET_UNITS" in prompt
+    assert "ABSOLUTE_AMOUNT" in prompt
+    assert "Daily insight body" in prompt
+    assert "state_distribution" in prompt
 
 
-def test_generate_v4_chronicle_falls_back_to_request_intelligence() -> None:
+def test_generate_v4_chronicle_uses_request_intelligence() -> None:
     with patch("src.domain.monthly_curator.LlmTransporter") as mock_transporter_cls, \
             patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
             patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
         transporter = mock_transporter_cls.return_value
-        del transporter.generate
         transporter.request_intelligence.return_value = f"[JSON_START]{_response()}[JSON_END]"
         curator = MonthlyCurator()
 
@@ -150,11 +205,12 @@ def test_generate_v4_chronicle_falls_back_to_request_intelligence() -> None:
             insights=[],
         )
 
-    assert result["chronicle"]["shield_review"] == "防壁は中立に機能しました。"
+    assert result["chronicle"]["portfolio_audit"] == "現金は家計側の構造変化として扱います。"
     transporter.request_intelligence.assert_called_once()
     fallback_prompt = transporter.request_intelligence.call_args[0][0]
     assert "<role>Chronicle Aggregator" in fallback_prompt
     assert "<monthly_trend_data>" in fallback_prompt
+    assert "<market_snapshot_summary>" in fallback_prompt
     assert '<focus area="ABSOLUTE_AMOUNT">' in fallback_prompt
 
 
@@ -163,7 +219,7 @@ def test_generate_v4_chronicle_uses_daily_metrics_total_path_without_ledger_tren
             patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
             patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
         transporter = mock_transporter_cls.return_value
-        transporter.generate.return_value = _response()
+        transporter.request_intelligence.return_value = _response()
         curator = MonthlyCurator()
 
         result = curator.generate_v4_chronicle(
@@ -191,6 +247,70 @@ def test_generate_v4_chronicle_uses_daily_metrics_total_path_without_ledger_tren
     assert result["meta"]["end_total_jpy"] == 1_150_000
     assert result["meta"]["total_change_jpy"] == 150_000
     assert result["meta"]["total_change_pct"] == 15.0
+
+
+def test_generate_v4_chronicle_summarizes_market_snapshot_boundaries() -> None:
+    with patch("src.domain.monthly_curator.LlmTransporter") as mock_transporter_cls, \
+            patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
+            patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
+        transporter = mock_transporter_cls.return_value
+        transporter.request_intelligence.return_value = _response()
+        curator = MonthlyCurator()
+
+        result = curator.generate_v4_chronicle(
+            "2026-04",
+            shadow_ledgers=[],
+            insights=[],
+            market_snapshots=[
+                {
+                    "target_date": "2026-04-01",
+                    "us_market": {"trading_date": "2026-03-31", "is_holiday": False},
+                    "market_summary": (
+                        "S&P500: +1.18% | NASDAQ100: +1.81% | SOX: +2.04% | "
+                        "米10年債: 4.26% (-0.04) | USD/JPY: 159.21 (-0.29%) | VIX: 18.36 (-0.76)"
+                    ),
+                },
+                {
+                    "target_date": "2026-04-02",
+                    "us_market": {"trading_date": "2026-04-01", "is_holiday": True},
+                    "market_summary": "",
+                },
+                {
+                    "target_date": "2026-04-03",
+                    "us_market": "closed",
+                    "market_summary": "USD/JPY: unavailable | VIX: 17.50",
+                },
+            ],
+        )
+
+    summary = result["meta"]["market_snapshot_summary"]
+    assert summary["snapshot_days"] == 3
+    assert summary["holiday_days"] == ["2026-04-02"]
+    assert summary["missing_summary_days"] == ["2026-04-02"]
+
+    first_observations = summary["daily_market_summaries"][0]["market_observations"]
+    assert first_observations["indices"] == {
+        "S&P500": {"change_pct": 1.18},
+        "NASDAQ100": {"change_pct": 1.81},
+        "SOX": {"change_pct": 2.04},
+    }
+    assert first_observations["us_10y_yield"] == {"yield_pct": 4.26, "change": -0.04}
+    assert first_observations["usd_jpy"] == {"rate": 159.21, "change_pct": -0.29}
+    assert first_observations["vix"] == {"level": 18.36, "change": -0.76}
+
+    missing_observations = summary["daily_market_summaries"][1]["market_observations"]
+    assert missing_observations == {
+        "indices": {},
+        "us_10y_yield": None,
+        "usd_jpy": None,
+        "vix": None,
+    }
+
+    non_dict_us_market = summary["daily_market_summaries"][2]
+    assert non_dict_us_market["us_trading_date"] == ""
+    assert non_dict_us_market["is_holiday"] is False
+    assert non_dict_us_market["market_observations"]["usd_jpy"] is None
+    assert non_dict_us_market["market_observations"]["vix"] == {"level": 17.5, "change": None}
 
 
 # --- 本文③〜⑥ 1,000字カウント定義の検証（titleは枠外） ---
@@ -309,6 +429,14 @@ def test_prompt_chronicle_system_v4_carries_length_constraints() -> None:
     # data_quality を本文に出さない旨
     assert "data_quality" in prompt
     assert "本文③〜⑥には出すな" in prompt
+    assert "market_snapshot_summary" in prompt
+    assert "next_month_watchは翌月の予測ではない" in prompt
+    assert "固定主語として強制してはならない" in prompt
+    assert "検討" in prompt
+
+    prompts_module = _load_real_prompts_module()
+    assert "検討" not in prompts_module.CURATOR_BANNED_WORDS
+    assert "検討" in prompts_module.MONTHLY_CHRONICLE_BANNED_WORDS
 
 
 def test_generate_v4_chronicle_prefers_ledger_trend_over_daily_metrics_total_path() -> None:
@@ -316,7 +444,7 @@ def test_generate_v4_chronicle_prefers_ledger_trend_over_daily_metrics_total_pat
             patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
             patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
         transporter = mock_transporter_cls.return_value
-        transporter.generate.return_value = _response()
+        transporter.request_intelligence.return_value = _response()
         curator = MonthlyCurator()
 
         result = curator.generate_v4_chronicle(
@@ -342,3 +470,56 @@ def test_generate_v4_chronicle_prefers_ledger_trend_over_daily_metrics_total_pat
     assert result["meta"]["ledger_days"] == 2
     assert result["meta"]["total_change_jpy"] == 30_000
     assert result["meta"]["total_change_pct"] == 20.0
+
+
+def test_generate_v4_chronicle_rejects_schema_mismatch() -> None:
+    with patch("src.domain.monthly_curator.LlmTransporter") as mock_transporter_cls, \
+            patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
+            patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
+        transporter = mock_transporter_cls.return_value
+        transporter.request_intelligence.return_value = json.dumps({
+            "chronicle": {
+                "title": "構造転換",
+                "monthly_summary": "総括",
+                "market_causality": "因果",
+                "phase_analysis": "文字列は不可",
+                "asset_contribution": [],
+                "portfolio_audit": "監査",
+                "next_month_watch": [],
+            },
+            "meta": {
+                "dominant_regime": "CALM",
+                "primary_causality": "TECH_DRIVEN",
+                "fx_impact": "NEUTRAL",
+                "risk_temperature": "LOW",
+                "data_quality": "OK",
+            },
+        })
+        curator = MonthlyCurator()
+
+        try:
+            curator.generate_v4_chronicle("2026-04", shadow_ledgers=[], insights=[])
+        except V4ChronicleSchemaViolation as exc:
+            assert "chronicle.phase_analysis type mismatch" in str(exc)
+        else:
+            raise AssertionError("schema mismatch was not rejected")
+
+
+def test_generate_v4_chronicle_rejects_banned_words() -> None:
+    with patch("src.domain.monthly_curator.LlmTransporter") as mock_transporter_cls, \
+            patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
+            patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4), \
+            patch("src.domain.monthly_curator.MONTHLY_CHRONICLE_BANNED_WORDS", _MONTHLY_CHRONICLE_BANNED_WORDS):
+        transporter = mock_transporter_cls.return_value
+        payload = json.loads(_response())
+        payload["chronicle"]["portfolio_audit"] = "様子見を続けます。"
+        transporter.request_intelligence.return_value = json.dumps(payload, ensure_ascii=False)
+        curator = MonthlyCurator()
+
+        try:
+            curator.generate_v4_chronicle("2026-04", shadow_ledgers=[], insights=[])
+        except V4ChronicleBannedWordsViolation as exc:
+            assert "Action Ban Violation" in str(exc)
+            assert "様子見" in str(exc)
+        else:
+            raise AssertionError("banned word was not rejected")

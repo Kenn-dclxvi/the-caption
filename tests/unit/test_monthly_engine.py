@@ -53,6 +53,7 @@ def harness():
          patch("src.app.monthly_engine.LedgerRepository")   as MockRepo,        \
          patch("src.app.monthly_engine.KnowledgeManager")   as MockKnowledge,   \
          patch("src.app.monthly_engine.DailyMetricsRepository") as MockDailyMetricsRepo, \
+         patch("src.app.monthly_engine.MarketSnapshotRepository") as MockMarketSnapshotRepo, \
          patch("src.app.monthly_engine.TimelineController") as MockTimeline,    \
          patch("src.app.monthly_engine.MonthlyCurator")     as MockCurator,     \
          patch("src.app.monthly_engine.MonthlyGuardRail")   as MockGuard,       \
@@ -63,6 +64,7 @@ def harness():
         repo       = MockRepo.return_value
         knowledge  = MockKnowledge.return_value
         daily_metrics_repo = MockDailyMetricsRepo.return_value
+        market_snapshot_repo = MockMarketSnapshotRepo.return_value
         timeline   = MockTimeline.return_value
         curator    = MockCurator.return_value
         guard      = MockGuard.return_value
@@ -76,6 +78,7 @@ def harness():
         repo.load.return_value = _SAMPLE_LEDGER_DICT
         knowledge.extract_monthly_insights.return_value = []
         daily_metrics_repo.load_month.return_value = []
+        market_snapshot_repo.load_month.return_value = []
         curator.generate_monthly_chronicle.return_value = _SAMPLE_NARRATIVE
         curator.generate_v4_chronicle.return_value = {
             "schema_version": "v4.1-monthly-chronicle",
@@ -103,6 +106,7 @@ def harness():
             "repo":      repo,
             "knowledge": knowledge,
             "daily_metrics_repo": daily_metrics_repo,
+            "market_snapshot_repo": market_snapshot_repo,
             "timeline":  timeline,
             "curator":   curator,
             "guard":     guard,
@@ -204,6 +208,31 @@ class TestMonthlyEngineGuardPath:
         assert summary_vm.fmt_total_pl == "+500,000"
 
 
+class TestMarketSnapshotRepository:
+
+    def test_load_month_reads_only_target_month_snapshots_in_date_order(self, tmp_path):
+        from src.infra.market_snapshot_repository import MarketSnapshotRepository
+
+        (tmp_path / "market_snapshot_20260115.json").write_text(
+            '{"target_date":"2026-01-15","market_summary":"mid"}',
+            encoding="utf-8",
+        )
+        (tmp_path / "market_snapshot_20260102.json").write_text(
+            '{"target_date":"2026-01-02","market_summary":"start"}',
+            encoding="utf-8",
+        )
+        (tmp_path / "market_snapshot_20260201.json").write_text(
+            '{"target_date":"2026-02-01","market_summary":"other"}',
+            encoding="utf-8",
+        )
+
+        with patch("src.infra.market_snapshot_repository.DIR_CURRENT", str(tmp_path)):
+            records = MarketSnapshotRepository().load_month("2026-01")
+
+        assert [record["target_date"] for record in records] == ["2026-01-02", "2026-01-15"]
+        assert [record["market_summary"] for record in records] == ["start", "mid"]
+
+
 class TestMonthlyEngineNarrativePath:
 
     def test_generates_chronicle_when_no_cache(self, harness):
@@ -215,8 +244,28 @@ class TestMonthlyEngineNarrativePath:
 
         mocks["daily_metrics_repo"].load_month.assert_called_once_with("2026-01")
         mocks["curator"].generate_v4_chronicle.assert_called_once()
+        mocks["market_snapshot_repo"].load_month.assert_called_once_with("2026-01")
         mocks["curator"].generate_monthly_chronicle.assert_not_called()
         mocks["chronicle"].save.assert_called_once()
+
+    def test_v4_chronicle_receives_market_snapshots(self, harness):
+        engine, mocks = harness
+        daily_metrics = _daily_metrics_records(15)
+        market_snapshots = [
+            {
+                "target_date": "2026-01-15",
+                "us_market": {"trading_date": "2026-01-14", "is_holiday": False},
+                "market_summary": "S&P500: +0.10% | VIX: 18.00",
+            }
+        ]
+        mocks["daily_metrics_repo"].load_month.return_value = daily_metrics
+        mocks["market_snapshot_repo"].load_month.return_value = market_snapshots
+
+        engine.run()
+
+        _, kwargs = mocks["curator"].generate_v4_chronicle.call_args
+        assert kwargs["daily_metrics"] == daily_metrics
+        assert kwargs["market_snapshots"] == market_snapshots
 
     def test_falls_back_to_legacy_chronicle_below_daily_metrics_threshold(self, harness):
         engine, mocks = harness
@@ -272,6 +321,36 @@ class TestMonthlyEngineNarrativePath:
 
         mocks["notifier"].system_alert.assert_called_once()
         assert "OPERATIONAL_LIMIT_MONTHLY" in mocks["notifier"].system_alert.call_args[0]
+
+    def test_v4_schema_violation_uses_schema_alert_code(self, harness):
+        from src.domain.monthly_curator import V4ChronicleSchemaViolation
+
+        engine, mocks = harness
+        mocks["daily_metrics_repo"].load_month.return_value = _daily_metrics_records(15)
+        mocks["curator"].generate_v4_chronicle.side_effect = V4ChronicleSchemaViolation(
+            "V4 Chronicle schema violation: chronicle.phase_analysis type mismatch"
+        )
+
+        engine.run()
+
+        mocks["notifier"].system_alert.assert_called_once()
+        assert "V4_SCHEMA_VIOLATION_MONTHLY" in mocks["notifier"].system_alert.call_args[0]
+        assert "OPERATIONAL_LIMIT_MONTHLY" not in mocks["notifier"].system_alert.call_args[0]
+
+    def test_v4_banned_words_violation_uses_banned_word_alert_code(self, harness):
+        from src.domain.monthly_curator import V4ChronicleBannedWordsViolation
+
+        engine, mocks = harness
+        mocks["daily_metrics_repo"].load_month.return_value = _daily_metrics_records(15)
+        mocks["curator"].generate_v4_chronicle.side_effect = V4ChronicleBannedWordsViolation(
+            "V4 Chronicle banned words violation: Action Ban Violation: ['様子見']"
+        )
+
+        engine.run()
+
+        mocks["notifier"].system_alert.assert_called_once()
+        assert "V4_BANNED_WORD_MONTHLY" in mocks["notifier"].system_alert.call_args[0]
+        assert "OPERATIONAL_LIMIT_MONTHLY" not in mocks["notifier"].system_alert.call_args[0]
 
 
 class TestMonthlyGuardRail:
