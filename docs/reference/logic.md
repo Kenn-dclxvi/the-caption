@@ -114,7 +114,7 @@ GuardRail は `target_date` が `is_holiday()` = `True` の場合、以下のロ
 
 **V4 Monthly Chronicle (ShadowLedger 月次総括)**
 
-`MonthlyCurator.generate_v4_chronicle()` は v4.3 の月次ロジックであり、`daily_metrics` が15件以上存在する月に使用する。対象月の `ShadowLedger` 履歴を日付順に読み、先頭日と末尾日の資産クラス別評価額を `source + asset_class` 単位で比較する。加えて、`daily_metrics_YYYYMMDD.json` と `market_snapshot_YYYYMMDD.json` を集約して、月間総資産推移、寄与上位、欠損日、転換点候補、市場観測サマリを月次AIへ渡す。
+`MonthlyCurator.generate_v4_chronicle()` は v4.3 の月次ロジックであり、`daily_metrics` が15件以上存在する月に使用する。対象月の `ShadowLedger` 履歴を日付順に読み、先頭日と末尾日の資産クラス別評価額を `source + asset_class` 単位で比較する。加えて、`daily_metrics_YYYYMMDD.json` と `market_snapshot_YYYYMMDD.json` を集約して、月間総資産推移、寄与上位、欠損日、転換点候補、市場観測サマリ原文、主要指数・米10年債・USD/JPY・VIXの構造化観測値を月次AIへ渡す。
 
 月次 CHRONICLE の `render_v4` はメール先頭に `Safe Ratio` セクションを表示する（描画は `MonthlyRenderer.__render_v4_safe_ratio()`）。旧 `Shield Review`（金・銀・プラチナの防壁評価）セクションは月次v4から削除された（#281）。
 
@@ -123,10 +123,10 @@ GuardRail は `target_date` が `is_holiday()` = `True` の場合、以下のロ
 | `MARKET_UNITS` | 市場環境に由来する動的資産の月次潮流として扱う |
 | `ABSOLUTE_AMOUNT` | 現金・外部資産の静的事実として扱い、市場因果とは切り離す |
 | Daily Metrics | `data/current/daily_metrics_YYYYMMDD.json` を月次AIの主入力として扱う |
-| Market Snapshot | `data/current/market_snapshot_YYYYMMDD.json` を月次AIの主入力として扱う。米国市場日付、休場、主要指数、VIX、USD/JPY等の観測値を渡し、欠損日は推測で補完しない |
+| Market Snapshot | `data/current/market_snapshot_YYYYMMDD.json` を月次AIの主入力として扱う。米国市場日付、休場、`market_summary` 原文、主要指数、米10年債、VIX、USD/JPY等の構造化観測値を渡し、欠損・解析不能値は推測で補完しない |
 | Daily Insights | `KnowledgeManager.extract_monthly_insights()` から対象月の鑑定記録を束ねる。補助入力であり必須ではない |
 
-LLM には `PROMPT_CHRONICLE_SYSTEM_V4` と、`<output_schema>` に埋め込んだJSON Schema形の `OUTPUT_SCHEMA_CHRONICLE_V4` を含む単一promptを `LlmTransporter.request_intelligence()` で渡す。戻り値は `{"chronicle": ..., "meta": ...}` の形で V4 月次テンプレートへ接続できる。`MonthlyCurator.generate_v4_chronicle()` は受信後にトップレベル、必須フィールド、基本型を検証し、不一致の場合は月次V4本文として採用しない。
+LLM には `PROMPT_CHRONICLE_SYSTEM_V4` と、`<output_schema>` に埋め込んだJSON Schema形の `OUTPUT_SCHEMA_CHRONICLE_V4` を含む単一promptを `LlmTransporter.request_intelligence()` で渡す。戻り値は `{"chronicle": ..., "meta": ...}` の形で V4 月次テンプレートへ接続できる。`MonthlyCurator.generate_v4_chronicle()` は受信後にトップレベル、必須フィールド、基本型を検証し、不一致の場合は月次V4本文として採用しない。schema violation と banned words violation は V4 専用例外として `MonthlyEngine.run()` に伝搬し、alert code を `V4_SCHEMA_VIOLATION_MONTHLY` / `V4_BANNED_WORD_MONTHLY` に分離する。
 月次の User データも `<daily_metrics_summary>`, `<market_snapshot_summary>`, `<daily_insights>`, `<monthly_trend_data>`, `<output_schema>` に分離し、`ABSOLUTE_AMOUNT` の増減は家計・運用の構造変化として扱う。
 方針監査（`Portfolio Audit`）はこの月次フェーズで表示・解釈する。
 

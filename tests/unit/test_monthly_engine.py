@@ -322,6 +322,36 @@ class TestMonthlyEngineNarrativePath:
         mocks["notifier"].system_alert.assert_called_once()
         assert "OPERATIONAL_LIMIT_MONTHLY" in mocks["notifier"].system_alert.call_args[0]
 
+    def test_v4_schema_violation_uses_schema_alert_code(self, harness):
+        from src.domain.monthly_curator import V4ChronicleSchemaViolation
+
+        engine, mocks = harness
+        mocks["daily_metrics_repo"].load_month.return_value = _daily_metrics_records(15)
+        mocks["curator"].generate_v4_chronicle.side_effect = V4ChronicleSchemaViolation(
+            "V4 Chronicle schema violation: chronicle.phase_analysis type mismatch"
+        )
+
+        engine.run()
+
+        mocks["notifier"].system_alert.assert_called_once()
+        assert "V4_SCHEMA_VIOLATION_MONTHLY" in mocks["notifier"].system_alert.call_args[0]
+        assert "OPERATIONAL_LIMIT_MONTHLY" not in mocks["notifier"].system_alert.call_args[0]
+
+    def test_v4_banned_words_violation_uses_banned_word_alert_code(self, harness):
+        from src.domain.monthly_curator import V4ChronicleBannedWordsViolation
+
+        engine, mocks = harness
+        mocks["daily_metrics_repo"].load_month.return_value = _daily_metrics_records(15)
+        mocks["curator"].generate_v4_chronicle.side_effect = V4ChronicleBannedWordsViolation(
+            "V4 Chronicle banned words violation: Action Ban Violation: ['様子見']"
+        )
+
+        engine.run()
+
+        mocks["notifier"].system_alert.assert_called_once()
+        assert "V4_BANNED_WORD_MONTHLY" in mocks["notifier"].system_alert.call_args[0]
+        assert "OPERATIONAL_LIMIT_MONTHLY" not in mocks["notifier"].system_alert.call_args[0]
+
 
 class TestMonthlyGuardRail:
 

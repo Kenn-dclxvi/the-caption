@@ -206,7 +206,7 @@ V4本流（`PROMPT_CHRONICLE_SYSTEM_V4` / `MonthlyCurator.generate_v4_chronicle(
 | :--- | :--- | :--- |
 | `{year_month}` | `MonthlyEngine` | 対象月 (YYYY-MM) |
 | `daily_metrics_summary` | `DailyMetricsRepository.load_month()` → `MonthlyCurator.generate_v4_chronicle()` | 対象月の `daily_metrics_YYYYMMDD.json` を圧縮した月次AIの主入力。15件未満の場合は既存月次Chronicleへフォールバック |
-| `market_snapshot_summary` | `MarketSnapshotRepository.load_month()` → `MonthlyCurator.generate_v4_chronicle()` | 対象月の `market_snapshot_YYYYMMDD.json` を圧縮した市場観測入力。米国市場日付、休場、主要指数、VIX、USD/JPY等を扱い、欠損日は推測で補完しない |
+| `market_snapshot_summary` | `MarketSnapshotRepository.load_month()` → `MonthlyCurator.generate_v4_chronicle()` | 対象月の `market_snapshot_YYYYMMDD.json` を圧縮した市場観測入力。米国市場日付、休場、`market_summary` 原文、構造化した主要指数、米10年債、VIX、USD/JPY等を扱い、欠損・解析不能値は推測で補完しない |
 | `{insight_stream}` | `KnowledgeManager.extract_monthly_insights()` | 対象月の日次Insightを時系列連結した補助テキスト |
 | `daily_context_summary` | `MonthlyCurator.generate_v4_chronicle()` | 既存Knowledge Bankがある場合の補助構造ログ |
 
@@ -223,7 +223,7 @@ V4本流（`PROMPT_CHRONICLE_SYSTEM_V4` / `MonthlyCurator.generate_v4_chronicle(
 `MonthlyCurator.generate_v4_chronicle()` は `daily_metrics_summary` と `market_snapshot_summary` を主入力とし、`knowledge_bank.md` から抽出した日次Insightは補助入力として連結する。
 
 - **抽出元**: `data/knowledge_bank.md`（`KnowledgeManager.extract_monthly_insights(year_month)` で対象月分のみ抽出）
-- V4 では `daily_metrics_YYYYMMDD.json` の総資産推移、`MARKET_UNITS` / `ABSOLUTE_AMOUNT` 分離、欠損、top movers と、`market_snapshot_YYYYMMDD.json` の市場観測サマリを優先する。`State / Archive / Archive Note` 行は存在する場合だけ補助構造ログとして集計する。
+- V4 では `daily_metrics_YYYYMMDD.json` の総資産推移、`MARKET_UNITS` / `ABSOLUTE_AMOUNT` 分離、欠損、top movers と、`market_snapshot_YYYYMMDD.json` の市場観測サマリを優先する。`market_snapshot_summary.daily_market_summaries[].market_summary` は原文を保持し、同じ日次要素の `market_observations` に `indices` / `us_10y_yield` / `usd_jpy` / `vix` の構造化観測値を併置する。`State / Archive / Archive Note` 行は存在する場合だけ補助構造ログとして集計する。
 - **フォーマット**:
 
 ```
@@ -290,7 +290,7 @@ V4本流の月次Chronicle（`OUTPUT_SCHEMA_CHRONICLE_V4` / `PROMPT_CHRONICLE_SY
 
 - `OUTPUT_SCHEMA_CHRONICLE_V4` はJSON Schema形で `<output_schema>` に埋め込み、`PROMPT_CHRONICLE_SYSTEM_V4` とUser payloadを結合した単一promptとして `LlmTransporter.request_intelligence(prompt)` へ委譲する。
 - 外部API側の structured outputs 強制は前提にせず、`MonthlyCurator.generate_v4_chronicle()` が受信後に `chronicle` / `meta` の存在、必須フィールド、`string` / `array<string>` の基本型を検証する。
-- 検証失敗時は `RuntimeError` とし、月次V4の不完全な本文をレンダリングしない。
+- 検証失敗時は `V4ChronicleSchemaViolation`、禁止語検出時は `V4ChronicleBannedWordsViolation` とし、月次V4の不完全な本文をレンダリングしない。どちらも `RuntimeError` 派生だが、`MonthlyEngine.run()` は alert code を `V4_SCHEMA_VIOLATION_MONTHLY` / `V4_BANNED_WORD_MONTHLY` として一般 `OPERATIONAL_LIMIT_MONTHLY` から分離する。
 
 #### 字数制約（titleを除く本文③〜⑥合計 ≤1,000字）
 

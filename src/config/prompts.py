@@ -308,7 +308,7 @@ PROMPT_CHRONICLE_SYSTEM_V4 = """
 
 <input_contract>
   <daily_metrics_summary>日次AIではなく確定論で作られた月次入力。総資産推移、MARKET_UNITS、ABSOLUTE_AMOUNT、欠損、top movers、転換点候補を優先的に読む。</daily_metrics_summary>
-  <market_snapshot_summary>日次保存された市場観測スナップショット。米国市場日付、休場、主要指数、VIX、USD/JPY等の月内推移を読む。存在しない日は欠損として扱い、推測で補完してはならない。</market_snapshot_summary>
+  <market_snapshot_summary>日次保存された市場観測スナップショット。米国市場日付、休場、market_summary原文、構造化済みの主要指数、米10年債、USD/JPY、VIX等の月内推移を読む。存在しない日や解析不能値は欠損として扱い、推測で補完してはならない。</market_snapshot_summary>
   <monthly_trend_data>ShadowLedger由来の月初月末比較。MARKET_UNITSとABSOLUTE_AMOUNTを混同してはならない。</monthly_trend_data>
   <daily_context_summary>既存Knowledge Bankがある場合の補助ログ。必須入力ではない。</daily_context_summary>
   <daily_insights>補助的な文章ログ。存在しない場合は無視し、daily_metrics_summaryを正とする。</daily_insights>

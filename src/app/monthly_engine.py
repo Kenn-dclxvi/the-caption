@@ -11,7 +11,11 @@ from src.infra.knowledge_manager import KnowledgeManager
 from src.infra.daily_metrics_repository import DailyMetricsRepository
 from src.infra.market_snapshot_repository import MarketSnapshotRepository
 from src.lib.timeline_controller import TimelineController
-from src.domain.monthly_curator import MonthlyCurator
+from src.domain.monthly_curator import (
+    MonthlyCurator,
+    V4ChronicleBannedWordsViolation,
+    V4ChronicleSchemaViolation,
+)
 from src.domain.monthly_guard import MonthlyGuardRail
 from src.infra.chronicle_repository import ChronicleRepository
 from src.app.renderer.view_models import SummaryViewModel
@@ -120,6 +124,16 @@ class MonthlyEngine:
                 logger.info(f"[Outcome] Monthly Chronicle Pipeline finished: DISPATCHED for {year_month}")
             else:
                 logger.warning("[Outcome] Monthly Chronicle Pipeline finished: DISPATCH FAILED")
+
+        except V4ChronicleSchemaViolation as v4_schema_err:
+            logger.warning(f"[V4] Schema violation: {v4_schema_err}")
+            logger.info("[Recovery] Action: Regenerate monthly V4 after correcting the chronicle JSON contract.")
+            self.__notifier.system_alert(str(v4_schema_err), "V4_SCHEMA_VIOLATION_MONTHLY")
+
+        except V4ChronicleBannedWordsViolation as v4_banned_err:
+            logger.warning(f"[V4] Banned words violation: {v4_banned_err}")
+            logger.info("[Recovery] Action: Regenerate monthly V4 with the banned-word guard satisfied.")
+            self.__notifier.system_alert(str(v4_banned_err), "V4_BANNED_WORD_MONTHLY")
 
         except RuntimeError as re_err:
             logger.warning(f"[Guard] Operational limit: {re_err}")

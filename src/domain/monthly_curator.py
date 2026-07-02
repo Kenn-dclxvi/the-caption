@@ -19,6 +19,15 @@ from src.lib.utils import SystemUtils
 
 logger = setup_logger(__name__)
 
+
+class V4ChronicleSchemaViolation(RuntimeError):
+    pass
+
+
+class V4ChronicleBannedWordsViolation(RuntimeError):
+    pass
+
+
 class MonthlyCurator:
     __REV: Final[str] = "Rev. 6"
 
@@ -298,18 +307,21 @@ class MonthlyCurator:
 
     def __parse_v4_json(self, raw_response: str) -> Dict[str, Any]:
         json_content = SystemUtils.extract_json_from_response(raw_response)
-        return json.loads(json_content)
+        try:
+            return json.loads(json_content)
+        except json.JSONDecodeError as exc:
+            raise V4ChronicleSchemaViolation("V4 Chronicle schema violation: invalid JSON response") from exc
 
     def __validate_v4_contract(self, data: Dict[str, Any]) -> None:
         if not isinstance(data, dict):
-            raise RuntimeError("V4 Chronicle schema violation: top-level response must be object")
+            raise V4ChronicleSchemaViolation("V4 Chronicle schema violation: top-level response must be object")
 
         chronicle = data.get("chronicle")
         meta = data.get("meta")
         if not isinstance(chronicle, dict):
-            raise RuntimeError("V4 Chronicle schema violation: chronicle must be object")
+            raise V4ChronicleSchemaViolation("V4 Chronicle schema violation: chronicle must be object")
         if not isinstance(meta, dict):
-            raise RuntimeError("V4 Chronicle schema violation: meta must be object")
+            raise V4ChronicleSchemaViolation("V4 Chronicle schema violation: meta must be object")
 
         required_chronicle = {
             "title": str,
@@ -330,19 +342,19 @@ class MonthlyCurator:
 
         for field, expected_type in required_chronicle.items():
             if field not in chronicle:
-                raise RuntimeError(f"V4 Chronicle schema violation: chronicle.{field} missing")
+                raise V4ChronicleSchemaViolation(f"V4 Chronicle schema violation: chronicle.{field} missing")
             if not isinstance(chronicle[field], expected_type):
-                raise RuntimeError(f"V4 Chronicle schema violation: chronicle.{field} type mismatch")
+                raise V4ChronicleSchemaViolation(f"V4 Chronicle schema violation: chronicle.{field} type mismatch")
 
         for field, expected_type in required_meta.items():
             if field not in meta:
-                raise RuntimeError(f"V4 Chronicle schema violation: meta.{field} missing")
+                raise V4ChronicleSchemaViolation(f"V4 Chronicle schema violation: meta.{field} missing")
             if not isinstance(meta[field], expected_type):
-                raise RuntimeError(f"V4 Chronicle schema violation: meta.{field} type mismatch")
+                raise V4ChronicleSchemaViolation(f"V4 Chronicle schema violation: meta.{field} type mismatch")
 
         for field in ("phase_analysis", "asset_contribution", "next_month_watch"):
             if any(not isinstance(item, str) for item in chronicle[field]):
-                raise RuntimeError(f"V4 Chronicle schema violation: chronicle.{field} items must be strings")
+                raise V4ChronicleSchemaViolation(f"V4 Chronicle schema violation: chronicle.{field} items must be strings")
 
     def __assert_v4_banned_words(self, data: Dict[str, Any]) -> None:
         chronicle = data.get("chronicle", {})
@@ -358,9 +370,9 @@ class MonthlyCurator:
         combined_text = " ".join(str(field) for field in fields)
         violations = [word for word in MONTHLY_CHRONICLE_BANNED_WORDS if word in combined_text]
         if violations:
-            violation_msg = f"Action Ban Violation: {violations}"
+            violation_msg = f"V4 Chronicle banned words violation: Action Ban Violation: {violations}"
             logger.error(f"[Audit] V4 censorship failed: {violation_msg}")
-            raise RuntimeError(violation_msg)
+            raise V4ChronicleBannedWordsViolation(violation_msg)
 
     def __normalize_v4_chronicle(
         self,
@@ -515,6 +527,7 @@ class MonthlyCurator:
                     "us_trading_date": us_market.get("trading_date", ""),
                     "is_holiday": bool(us_market.get("is_holiday", False)),
                     "market_summary": market_summary,
+                    "market_observations": self.__parse_market_observations(market_summary),
                 }
             )
 
@@ -526,6 +539,60 @@ class MonthlyCurator:
             "missing_summary_days": missing_summary_days,
             "daily_market_summaries": daily_summaries,
         }
+
+    def __parse_market_observations(self, market_summary: str) -> Dict[str, Any]:
+        observations: Dict[str, Any] = {
+            "indices": {},
+            "us_10y_yield": None,
+            "usd_jpy": None,
+            "vix": None,
+        }
+        if not market_summary:
+            return observations
+
+        index_labels = {"S&P500", "NASDAQ100", "SOX"}
+        for segment in market_summary.split("|"):
+            label, separator, raw_value = segment.partition(":")
+            if not separator:
+                continue
+            label = label.strip()
+            raw_value = raw_value.strip()
+            primary_value = self.__extract_market_number(raw_value)
+            secondary_value = self.__extract_parenthetical_market_number(raw_value)
+            if primary_value is None:
+                continue
+
+            if label in index_labels:
+                observations["indices"][label] = {"change_pct": primary_value}
+            elif label == "米10年債":
+                observations["us_10y_yield"] = {
+                    "yield_pct": primary_value,
+                    "change": secondary_value,
+                }
+            elif label == "USD/JPY":
+                observations["usd_jpy"] = {
+                    "rate": primary_value,
+                    "change_pct": secondary_value,
+                }
+            elif label == "VIX":
+                observations["vix"] = {
+                    "level": primary_value,
+                    "change": secondary_value,
+                }
+
+        return observations
+
+    def __extract_market_number(self, value: str) -> float | None:
+        match = re.search(r"[-+]?\d+(?:,\d{3})*(?:\.\d+)?", value)
+        if not match:
+            return None
+        return float(match.group(0).replace(",", ""))
+
+    def __extract_parenthetical_market_number(self, value: str) -> float | None:
+        match = re.search(r"\(([-+]?\d+(?:,\d{3})*(?:\.\d+)?)%?\)", value)
+        if not match:
+            return None
+        return float(match.group(1).replace(",", ""))
 
     def __aggregate_context_records(self, insights: List[Dict[str, str]]) -> Dict[str, Any]:
         state_counts: Dict[str, int] = {}

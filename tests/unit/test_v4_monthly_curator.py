@@ -162,6 +162,13 @@ def test_generate_v4_chronicle_aggregates_dynamic_and_static_sources() -> None:
     market_snapshot_summary = result["meta"]["market_snapshot_summary"]
     assert market_snapshot_summary["snapshot_days"] == 1
     assert market_snapshot_summary["daily_market_summaries"][0]["us_trading_date"] == "2026-04-14"
+    assert market_snapshot_summary["daily_market_summaries"][0]["market_observations"]["indices"]["S&P500"] == {
+        "change_pct": 0.1
+    }
+    assert market_snapshot_summary["daily_market_summaries"][0]["market_observations"]["vix"] == {
+        "level": 18.0,
+        "change": None,
+    }
 
     transporter.request_intelligence.assert_called_once()
     prompt = transporter.request_intelligence.call_args[0][0]
@@ -236,6 +243,70 @@ def test_generate_v4_chronicle_uses_daily_metrics_total_path_without_ledger_tren
     assert result["meta"]["end_total_jpy"] == 1_150_000
     assert result["meta"]["total_change_jpy"] == 150_000
     assert result["meta"]["total_change_pct"] == 15.0
+
+
+def test_generate_v4_chronicle_summarizes_market_snapshot_boundaries() -> None:
+    with patch("src.domain.monthly_curator.LlmTransporter") as mock_transporter_cls, \
+            patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
+            patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
+        transporter = mock_transporter_cls.return_value
+        transporter.request_intelligence.return_value = _response()
+        curator = MonthlyCurator()
+
+        result = curator.generate_v4_chronicle(
+            "2026-04",
+            shadow_ledgers=[],
+            insights=[],
+            market_snapshots=[
+                {
+                    "target_date": "2026-04-01",
+                    "us_market": {"trading_date": "2026-03-31", "is_holiday": False},
+                    "market_summary": (
+                        "S&P500: +1.18% | NASDAQ100: +1.81% | SOX: +2.04% | "
+                        "米10年債: 4.26% (-0.04) | USD/JPY: 159.21 (-0.29%) | VIX: 18.36 (-0.76)"
+                    ),
+                },
+                {
+                    "target_date": "2026-04-02",
+                    "us_market": {"trading_date": "2026-04-01", "is_holiday": True},
+                    "market_summary": "",
+                },
+                {
+                    "target_date": "2026-04-03",
+                    "us_market": "closed",
+                    "market_summary": "USD/JPY: unavailable | VIX: 17.50",
+                },
+            ],
+        )
+
+    summary = result["meta"]["market_snapshot_summary"]
+    assert summary["snapshot_days"] == 3
+    assert summary["holiday_days"] == ["2026-04-02"]
+    assert summary["missing_summary_days"] == ["2026-04-02"]
+
+    first_observations = summary["daily_market_summaries"][0]["market_observations"]
+    assert first_observations["indices"] == {
+        "S&P500": {"change_pct": 1.18},
+        "NASDAQ100": {"change_pct": 1.81},
+        "SOX": {"change_pct": 2.04},
+    }
+    assert first_observations["us_10y_yield"] == {"yield_pct": 4.26, "change": -0.04}
+    assert first_observations["usd_jpy"] == {"rate": 159.21, "change_pct": -0.29}
+    assert first_observations["vix"] == {"level": 18.36, "change": -0.76}
+
+    missing_observations = summary["daily_market_summaries"][1]["market_observations"]
+    assert missing_observations == {
+        "indices": {},
+        "us_10y_yield": None,
+        "usd_jpy": None,
+        "vix": None,
+    }
+
+    non_dict_us_market = summary["daily_market_summaries"][2]
+    assert non_dict_us_market["us_trading_date"] == ""
+    assert non_dict_us_market["is_holiday"] is False
+    assert non_dict_us_market["market_observations"]["usd_jpy"] is None
+    assert non_dict_us_market["market_observations"]["vix"] == {"level": 17.5, "change": None}
 
 
 # --- 本文③〜⑥ 1,000字カウント定義の検証（titleは枠外） ---
