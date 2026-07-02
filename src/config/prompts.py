@@ -199,6 +199,11 @@ CURATOR_BANNED_WORDS: Final[List[str]] = [
     "距離を置く"
 ]
 
+MONTHLY_CHRONICLE_BANNED_WORDS: Final[List[str]] = [
+    *CURATOR_BANNED_WORDS,
+    "検討",
+]
+
 EXHIBITION_THEMES: Final[Dict[str, Tuple[str, str]]] = {
     "CRASH": (
         "The Seed",
@@ -223,22 +228,78 @@ EXHIBITION_THEMES: Final[Dict[str, Tuple[str, str]]] = {
 # ==========================================
 
 OUTPUT_SCHEMA_CHRONICLE_V4 = {
-    "chronicle": {
-        "title": "この一ヶ月を一言で表す歴史的表題。短い見出し（体言止め可）。本文1,000字カウントの枠外。",
-        "monthly_summary": "③総括。月初月末、総資産推移、主要な変化を統合する。結論を先に置き、≤200字に収める。",
-        "market_causality": "④因果（市場レジーム）。MARKET_UNITSに限定した月間の市場因果。Market Regime + Portfolio Movement + Phase Timeline を1ブロックに集約し、最大寄与（NYFANG中心）に絞る。phase_analysis・asset_contributionと合わせ合計≤400字。寄与日・金額の多重掲載は1回に集約。数値は丸めてよい。",
-        "phase_analysis": ["④因果（局面変化）。月内の転換点と根拠を短く列挙。market_causality・asset_contributionと合計≤400字。最大寄与に絞り、同一事象の繰り返しを避ける。"],
-        "asset_contribution": ["④因果（資産寄与）。月間寄与上位または足を引っ張った資産・資産クラス。market_causality・phase_analysisと合計≤400字。寄与日・金額は1回に集約し、最大寄与（NYFANG中心）に絞る。金額は丸め可。"],
-        "portfolio_audit": "⑤監査。集中度・比率変化・方針維持の妥当性に絞る。≤250字。",
-        "next_month_watch": ["⑥翌月の注視点。3点に厳選し、合計≤150字。"]
+    "type": "object",
+    "required": ["chronicle", "meta"],
+    "additionalProperties": False,
+    "properties": {
+        "chronicle": {
+            "type": "object",
+            "required": [
+                "title",
+                "monthly_summary",
+                "market_causality",
+                "phase_analysis",
+                "asset_contribution",
+                "portfolio_audit",
+                "next_month_watch",
+            ],
+            "additionalProperties": False,
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "この一ヶ月を一言で表す歴史的表題。短い見出し（体言止め可）。本文1,000字カウントの枠外。",
+                },
+                "monthly_summary": {
+                    "type": "string",
+                    "description": "③総括。月初月末、総資産推移、主要な変化を統合する。結論を先に置き、≤200字に収める。",
+                },
+                "market_causality": {
+                    "type": "string",
+                    "description": "④因果（市場レジーム）。MARKET_UNITSに限定した月間の市場因果。Market Regime + Portfolio Movement + Phase Timeline を1ブロックに集約し、月間寄与上位に絞る。phase_analysis・asset_contributionと合わせ合計≤400字。寄与日・金額の多重掲載は1回に集約。数値は丸めてよい。",
+                },
+                "phase_analysis": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "④因果（局面変化）。月内の転換点と根拠を短く列挙。market_causality・asset_contributionと合計≤400字。最大寄与に絞り、同一事象の繰り返しを避ける。",
+                },
+                "asset_contribution": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "④因果（資産寄与）。月間寄与上位または足を引っ張った資産・資産クラス。market_causality・phase_analysisと合計≤400字。寄与日・金額は1回に集約し、月間寄与上位に絞る。金額は丸め可。",
+                },
+                "portfolio_audit": {
+                    "type": "string",
+                    "description": "⑤監査。集中度・比率変化・方針維持の妥当性に絞る。≤250字。",
+                },
+                "next_month_watch": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "⑥翌月の注視点。提供済み月次データから継続観測すべき事実ベースの論点を3点に厳選し、予測・示唆ではなく観測項目として合計≤150字に収める。",
+                },
+            },
+        },
+        "meta": {
+            "type": "object",
+            "required": [
+                "dominant_regime",
+                "primary_causality",
+                "fx_impact",
+                "risk_temperature",
+                "data_quality",
+            ],
+            "additionalProperties": False,
+            "properties": {
+                "dominant_regime": {"type": "string", "description": "月間の主要レジーム"},
+                "primary_causality": {"type": "string", "description": "月間主因"},
+                "fx_impact": {"type": "string", "description": "為替影響"},
+                "risk_temperature": {"type": "string", "description": "月間リスク温度"},
+                "data_quality": {
+                    "type": "string",
+                    "description": "欠損・休場・未確定データの扱い。本文③〜⑥には用いず、監査ログおよびメールヘッダの短い品質表示にのみ用いる。",
+                },
+            },
+        },
     },
-    "meta": {
-        "dominant_regime": "月間の主要レジーム",
-        "primary_causality": "月間主因",
-        "fx_impact": "為替影響",
-        "risk_temperature": "月間リスク温度",
-        "data_quality": "欠損・休場・未確定データの扱い。値は生成・保持してよいが、本文表示には用いない監査ログ向け項目である。"
-    }
 }
 
 PROMPT_CHRONICLE_SYSTEM_V4 = """
@@ -247,9 +308,11 @@ PROMPT_CHRONICLE_SYSTEM_V4 = """
 
 <input_contract>
   <daily_metrics_summary>日次AIではなく確定論で作られた月次入力。総資産推移、MARKET_UNITS、ABSOLUTE_AMOUNT、欠損、top movers、転換点候補を優先的に読む。</daily_metrics_summary>
+  <market_snapshot_summary>日次保存された市場観測スナップショット。米国市場日付、休場、主要指数、VIX、USD/JPY等の月内推移を読む。存在しない日は欠損として扱い、推測で補完してはならない。</market_snapshot_summary>
   <monthly_trend_data>ShadowLedger由来の月初月末比較。MARKET_UNITSとABSOLUTE_AMOUNTを混同してはならない。</monthly_trend_data>
   <daily_context_summary>既存Knowledge Bankがある場合の補助ログ。必須入力ではない。</daily_context_summary>
   <daily_insights>補助的な文章ログ。存在しない場合は無視し、daily_metrics_summaryを正とする。</daily_insights>
+  <output_schema>JSON Schema形の構造化出力契約。トップレベル、必須フィールド、基本型は実行時にも検証される。</output_schema>
 </input_contract>
 
 <analytical_focus>
@@ -265,7 +328,7 @@ PROMPT_CHRONICLE_SYSTEM_V4 = """
 <length_constraints>
   <rule>結論+リスク重視の簡潔版で記述せよ。titleを除く本文③〜⑥（monthly_summary / market_causality + phase_analysis + asset_contribution / portfolio_audit / next_month_watch）の可読テキスト合計を1,000字以内に収めよ。titleは1,000字カウントの枠外とする。</rule>
   <rule>字数配分: ③monthly_summary ≤200字 / ④因果ブロック(market_causality + phase_analysis + asset_contribution の合計) ≤400字 / ⑤portfolio_audit ≤250字 / ⑥next_month_watch ≤150字。titleは短い見出しとし、1,000字カウントの枠外とする。</rule>
-  <rule>④因果は Market Regime + Portfolio Movement + Phase Timeline を1ブロックに集約し、最大寄与（NYFANG中心）に絞れ。寄与日・金額の多重掲載は1回に集約せよ。</rule>
+  <rule>④因果は Market Regime + Portfolio Movement + Phase Timeline を1ブロックに集約し、最大寄与銘柄・資産クラスに絞れ。NYFANGは最大寄与に含まれる場合だけ中心として扱い、固定主語として強制してはならない。寄与日・金額の多重掲載は1回に集約せよ。</rule>
   <rule>短縮して余白が生じても、埋め戻し（加筆）は禁止する。結論とリスクに絞り、簡潔さを優先せよ。</rule>
 </length_constraints>
 
@@ -275,6 +338,14 @@ PROMPT_CHRONICLE_SYSTEM_V4 = """
 </dedup_constraints>
 
 <data_quality_constraints>
-  <rule>meta.data_quality（TSMC fx_rate乖離・HOLIDAY_GUARD・daily_insightsの部分ログ等）は監査ログ向けであり、本文③〜⑥には出すな。値は生成・保持してよいが、本文ナラティブに混ぜてはならない。</rule>
+  <rule>meta.data_quality（TSMC fx_rate乖離・HOLIDAY_GUARD・daily_insightsの部分ログ等）は監査ログおよびメールヘッダの短い品質表示向けであり、本文③〜⑥には出すな。値は生成・保持してよいが、本文ナラティブに混ぜてはならない。</rule>
 </data_quality_constraints>
+
+<forecast_boundary>
+  <rule>next_month_watchは翌月の予測ではない。対象月データから継続観測すべき事実ベースの論点を列挙するだけに留め、騰落・イベント・投資行動の未来予測や不確実な示唆を禁ずる。</rule>
+</forecast_boundary>
+
+<banned_words>
+  <rule>MONTHLY_CHRONICLE_BANNED_WORDS（静観・様子見・一旦・と思われる・一喜一憂・見守り・ホールド・距離を置く・検討）をchronicle本文フィールドに含めるな。</rule>
+</banned_words>
 """

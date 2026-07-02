@@ -8,6 +8,7 @@ from src.config.settings import DATA_DIR
 from src.config.prompts import (
     MONTHLY_CHRONICLE_REPORT,
     CURATOR_BANNED_WORDS,
+    MONTHLY_CHRONICLE_BANNED_WORDS,
     PROMPT_CHRONICLE_SYSTEM_V4,
     OUTPUT_SCHEMA_CHRONICLE_V4,
 )
@@ -50,6 +51,7 @@ class MonthlyCurator:
         shadow_ledgers: Optional[List[ShadowLedger]] = None,
         insights: Optional[List[Dict[str, str]]] = None,
         daily_metrics: Optional[List[Dict[str, Any]]] = None,
+        market_snapshots: Optional[List[Dict[str, Any]]] = None,
         ledger_paths: Optional[List[str]] = None,
         knowledge_manager: Optional[KnowledgeManager] = None,
     ) -> Dict[str, Any]:
@@ -58,15 +60,33 @@ class MonthlyCurator:
         resolved_ledgers = shadow_ledgers if shadow_ledgers is not None else self.__load_v4_ledgers(year_month, ledger_paths)
         resolved_insights = insights if insights is not None else self.__load_v4_insights(year_month, knowledge_manager)
         resolved_metrics = daily_metrics or []
+        resolved_market_snapshots = market_snapshots or []
         trend_summary = self.__aggregate_v4_ledgers(resolved_ledgers)
         metrics_summary = self.__aggregate_daily_metrics(resolved_metrics)
+        market_snapshot_summary = self.__aggregate_market_snapshots(resolved_market_snapshots)
         context_summary = self.__aggregate_context_records(resolved_insights)
 
-        prompt = self.__build_v4_prompt(year_month, resolved_insights, trend_summary, context_summary, metrics_summary)
+        prompt = self.__build_v4_prompt(
+            year_month,
+            resolved_insights,
+            trend_summary,
+            context_summary,
+            metrics_summary,
+            market_snapshot_summary,
+        )
         raw_response = self.__request_v4_intelligence(prompt)
         parsed = self.__parse_v4_json(raw_response)
+        self.__validate_v4_contract(parsed)
+        self.__assert_v4_banned_words(parsed)
 
-        return self.__normalize_v4_chronicle(parsed, year_month, trend_summary, context_summary, metrics_summary)
+        return self.__normalize_v4_chronicle(
+            parsed,
+            year_month,
+            trend_summary,
+            context_summary,
+            metrics_summary,
+            market_snapshot_summary,
+        )
 
     def __execute_prompt(self, prompt: str) -> Optional[Dict[str, Any]]:
         logger.info(f"[Acquisition] Executing monthly prompt (Size: {len(prompt)}, preview={prompt[:200]!r}...)")
@@ -232,6 +252,7 @@ class MonthlyCurator:
         trend_summary: Dict[str, Any],
         context_summary: Dict[str, Any],
         metrics_summary: Dict[str, Any],
+        market_snapshot_summary: Dict[str, Any],
     ) -> str:
         insight_stream = "\n\n".join(
             f"[{record.get('date', 'unknown')}]\n{record.get('content', '')}"
@@ -242,6 +263,7 @@ class MonthlyCurator:
             "daily_insights": insight_stream,
             "daily_context_summary": context_summary,
             "daily_metrics_summary": metrics_summary,
+            "market_snapshot_summary": market_snapshot_summary,
             "shadow_ledger_monthly_trend": trend_summary,
             "output_schema": OUTPUT_SCHEMA_CHRONICLE_V4,
         }
@@ -257,6 +279,9 @@ class MonthlyCurator:
             "  <daily_metrics_summary>\n"
             f"{json.dumps(payload['daily_metrics_summary'], ensure_ascii=False, indent=2)}\n"
             "  </daily_metrics_summary>\n"
+            "  <market_snapshot_summary>\n"
+            f"{json.dumps(payload['market_snapshot_summary'], ensure_ascii=False, indent=2)}\n"
+            "  </market_snapshot_summary>\n"
             "  <monthly_trend_data>\n"
             f"{json.dumps(payload['shadow_ledger_monthly_trend'], ensure_ascii=False, indent=2)}\n"
             "  </monthly_trend_data>\n"
@@ -269,14 +294,73 @@ class MonthlyCurator:
 
     def __request_v4_intelligence(self, prompt: str) -> str:
         logger.info(f"[V4] Executing monthly chronicle prompt (Size: {len(prompt)})")
-        generate = getattr(self.__transporter, "generate", None)
-        if callable(generate):
-            return generate(PROMPT_CHRONICLE_SYSTEM_V4, prompt, OUTPUT_SCHEMA_CHRONICLE_V4)
         return self.__transporter.request_intelligence(f"{PROMPT_CHRONICLE_SYSTEM_V4}\n\n{prompt}")
 
     def __parse_v4_json(self, raw_response: str) -> Dict[str, Any]:
         json_content = SystemUtils.extract_json_from_response(raw_response)
         return json.loads(json_content)
+
+    def __validate_v4_contract(self, data: Dict[str, Any]) -> None:
+        if not isinstance(data, dict):
+            raise RuntimeError("V4 Chronicle schema violation: top-level response must be object")
+
+        chronicle = data.get("chronicle")
+        meta = data.get("meta")
+        if not isinstance(chronicle, dict):
+            raise RuntimeError("V4 Chronicle schema violation: chronicle must be object")
+        if not isinstance(meta, dict):
+            raise RuntimeError("V4 Chronicle schema violation: meta must be object")
+
+        required_chronicle = {
+            "title": str,
+            "monthly_summary": str,
+            "market_causality": str,
+            "phase_analysis": list,
+            "asset_contribution": list,
+            "portfolio_audit": str,
+            "next_month_watch": list,
+        }
+        required_meta = {
+            "dominant_regime": str,
+            "primary_causality": str,
+            "fx_impact": str,
+            "risk_temperature": str,
+            "data_quality": str,
+        }
+
+        for field, expected_type in required_chronicle.items():
+            if field not in chronicle:
+                raise RuntimeError(f"V4 Chronicle schema violation: chronicle.{field} missing")
+            if not isinstance(chronicle[field], expected_type):
+                raise RuntimeError(f"V4 Chronicle schema violation: chronicle.{field} type mismatch")
+
+        for field, expected_type in required_meta.items():
+            if field not in meta:
+                raise RuntimeError(f"V4 Chronicle schema violation: meta.{field} missing")
+            if not isinstance(meta[field], expected_type):
+                raise RuntimeError(f"V4 Chronicle schema violation: meta.{field} type mismatch")
+
+        for field in ("phase_analysis", "asset_contribution", "next_month_watch"):
+            if any(not isinstance(item, str) for item in chronicle[field]):
+                raise RuntimeError(f"V4 Chronicle schema violation: chronicle.{field} items must be strings")
+
+    def __assert_v4_banned_words(self, data: Dict[str, Any]) -> None:
+        chronicle = data.get("chronicle", {})
+        fields = [
+            chronicle.get("title", ""),
+            chronicle.get("monthly_summary", ""),
+            chronicle.get("market_causality", ""),
+            chronicle.get("portfolio_audit", ""),
+            " ".join(chronicle.get("phase_analysis", [])),
+            " ".join(chronicle.get("asset_contribution", [])),
+            " ".join(chronicle.get("next_month_watch", [])),
+        ]
+        combined_text = " ".join(str(field) for field in fields)
+        violations = [word for word in MONTHLY_CHRONICLE_BANNED_WORDS if word in combined_text]
+        if violations:
+            violation_msg = f"Action Ban Violation: {violations}"
+            logger.error(f"[Audit] V4 censorship failed: {violation_msg}")
+            raise RuntimeError(violation_msg)
 
     def __normalize_v4_chronicle(
         self,
@@ -285,6 +369,7 @@ class MonthlyCurator:
         trend_summary: Dict[str, Any],
         context_summary: Dict[str, Any],
         metrics_summary: Dict[str, Any],
+        market_snapshot_summary: Dict[str, Any],
     ) -> Dict[str, Any]:
         chronicle = data.get("chronicle", data)
         meta = data.get("meta", {})
@@ -324,6 +409,7 @@ class MonthlyCurator:
                 "asset_class_trends": trend_summary.get("asset_class_trends", []),
                 "daily_context_summary": context_summary,
                 "daily_metrics_summary": metrics_summary,
+                "market_snapshot_summary": market_snapshot_summary,
                 "start_total_jpy": start_total_jpy,
                 "end_total_jpy": end_total_jpy,
                 "total_change_jpy": total_change_jpy,
@@ -399,6 +485,46 @@ class MonthlyCurator:
             "anomaly_days": anomaly_days,
             "turning_points": turning_points,
             "data_quality_label": "HAS_MISSING_PRICING" if missing_days else "OK",
+        }
+
+    def __aggregate_market_snapshots(self, records: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if not records:
+            return {
+                "snapshot_days": 0,
+                "daily_market_summaries": [],
+            }
+
+        sorted_records = sorted(records, key=lambda row: str(row.get("target_date", "")))
+        daily_summaries: List[Dict[str, Any]] = []
+        holiday_days: List[str] = []
+        missing_summary_days: List[str] = []
+
+        for row in sorted_records:
+            target_date = str(row.get("target_date", ""))
+            us_market = row.get("us_market", {})
+            if not isinstance(us_market, dict):
+                us_market = {}
+            market_summary = str(row.get("market_summary", "") or "")
+            if us_market.get("is_holiday"):
+                holiday_days.append(target_date)
+            if not market_summary:
+                missing_summary_days.append(target_date)
+            daily_summaries.append(
+                {
+                    "target_date": target_date,
+                    "us_trading_date": us_market.get("trading_date", ""),
+                    "is_holiday": bool(us_market.get("is_holiday", False)),
+                    "market_summary": market_summary,
+                }
+            )
+
+        return {
+            "snapshot_days": len(sorted_records),
+            "start_date": daily_summaries[0]["target_date"],
+            "end_date": daily_summaries[-1]["target_date"],
+            "holiday_days": holiday_days,
+            "missing_summary_days": missing_summary_days,
+            "daily_market_summaries": daily_summaries,
         }
 
     def __aggregate_context_records(self, insights: List[Dict[str, str]]) -> Dict[str, Any]:

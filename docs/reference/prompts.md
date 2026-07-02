@@ -200,22 +200,30 @@ AI出力の Enum 型整合をシステム側で自律検証し、必要に応じ
 
 ### 3.1 入力変数マップ
 
-テンプレート `MONTHLY_CHRONICLE_REPORT` に注入される変数一覧。
+V4本流（`PROMPT_CHRONICLE_SYSTEM_V4` / `MonthlyCurator.generate_v4_chronicle()`）の入力一覧。
 
 | 変数 | 供給元 | 内容 |
 | :--- | :--- | :--- |
 | `{year_month}` | `MonthlyEngine` | 対象月 (YYYY-MM) |
 | `daily_metrics_summary` | `DailyMetricsRepository.load_month()` → `MonthlyCurator.generate_v4_chronicle()` | 対象月の `daily_metrics_YYYYMMDD.json` を圧縮した月次AIの主入力。15件未満の場合は既存月次Chronicleへフォールバック |
+| `market_snapshot_summary` | `MarketSnapshotRepository.load_month()` → `MonthlyCurator.generate_v4_chronicle()` | 対象月の `market_snapshot_YYYYMMDD.json` を圧縮した市場観測入力。米国市場日付、休場、主要指数、VIX、USD/JPY等を扱い、欠損日は推測で補完しない |
+| `{insight_stream}` | `KnowledgeManager.extract_monthly_insights()` | 対象月の日次Insightを時系列連結した補助テキスト |
+| `daily_context_summary` | `MonthlyCurator.generate_v4_chronicle()` | 既存Knowledge Bankがある場合の補助構造ログ |
+
+レガシー経路（`MONTHLY_CHRONICLE_REPORT` / `daily_metrics` 15件未満フォールバック）に注入される変数一覧。
+
+| 変数 | 供給元 | 内容 |
+| :--- | :--- | :--- |
+| `{year_month}` | `MonthlyEngine` | 対象月 (YYYY-MM) |
 | `{insight_stream}` | `KnowledgeManager.extract_monthly_insights()` | 対象月の日次Insightを時系列連結した補助テキスト |
 | `{safe_ratio}` | `SummaryViewModel` | 前月末最終営業日時点の安全資産比率 |
-| `daily_context_summary` | `MonthlyCurator.generate_v4_chronicle()` | 既存Knowledge Bankがある場合の補助構造ログ |
 
 ### 3.2 Insight Stream アセンブリ
 
-`MonthlyCurator.generate_v4_chronicle()` は `daily_metrics_summary` を主入力とし、`knowledge_bank.md` から抽出した日次Insightは補助入力として連結する。
+`MonthlyCurator.generate_v4_chronicle()` は `daily_metrics_summary` と `market_snapshot_summary` を主入力とし、`knowledge_bank.md` から抽出した日次Insightは補助入力として連結する。
 
 - **抽出元**: `data/knowledge_bank.md`（`KnowledgeManager.extract_monthly_insights(year_month)` で対象月分のみ抽出）
-- V4 では `daily_metrics_YYYYMMDD.json` の総資産推移、`MARKET_UNITS` / `ABSOLUTE_AMOUNT` 分離、欠損、top movers を優先し、`State / Archive / Archive Note` 行は存在する場合だけ補助構造ログとして集計する。
+- V4 では `daily_metrics_YYYYMMDD.json` の総資産推移、`MARKET_UNITS` / `ABSOLUTE_AMOUNT` 分離、欠損、top movers と、`market_snapshot_YYYYMMDD.json` の市場観測サマリを優先する。`State / Archive / Archive Note` 行は存在する場合だけ補助構造ログとして集計する。
 - **フォーマット**:
 
 ```
@@ -240,7 +248,7 @@ AI出力の Enum 型整合をシステム側で自律検証し、必要に応じ
 
 ### 3.4 出力JSONスキーマ（V4本流・マルチセクション）
 
-V4本流の月次Chronicle（`OUTPUT_SCHEMA_CHRONICLE_V4` / `PROMPT_CHRONICLE_SYSTEM_V4`、`src/config/prompts.py`）は、以下のマルチセクションJSON構造を厳格に遵守する。`MonthlyCurator.generate_v4_chronicle()` が生成し、`MonthlyRenderer.render_v4()` が `v4_chronicle.html` にレンダリングする。
+V4本流の月次Chronicle（`OUTPUT_SCHEMA_CHRONICLE_V4` / `PROMPT_CHRONICLE_SYSTEM_V4`、`src/config/prompts.py`）は、JSON Schema形の返却フォーマット契約を `<output_schema>` としてUser payloadへ埋め込む。外部APIの構造化出力強制は前提にせず、`MonthlyCurator.generate_v4_chronicle()` は `LlmTransporter.request_intelligence(prompt)` からの受信後にトップレベル、必須フィールド、基本型を検証してから `MonthlyRenderer.render_v4()` が `v4_chronicle.html` にレンダリングする。
 
 ```json
 {
@@ -251,14 +259,14 @@ V4本流の月次Chronicle（`OUTPUT_SCHEMA_CHRONICLE_V4` / `PROMPT_CHRONICLE_SY
     "phase_analysis": ["④因果（局面変化の列挙）"],
     "asset_contribution": ["④因果（資産寄与の列挙）"],
     "portfolio_audit": "⑤監査（≤250字）",
-    "next_month_watch": ["⑥翌月の注視点（3点・合計≤150字）"]
+    "next_month_watch": ["⑥翌月の注視点（3点・合計≤150字。予測ではなく継続観測項目）"]
   },
   "meta": {
     "dominant_regime": "月間の主要レジーム",
     "primary_causality": "月間主因",
     "fx_impact": "為替影響",
     "risk_temperature": "月間リスク温度",
-    "data_quality": "欠損・休場・未確定データの扱い（監査ログ向け。本文表示には用いない）"
+    "data_quality": "欠損・休場・未確定データの扱い（監査ログおよびメールヘッダ向け。本文③〜⑥には用いない）"
   }
 }
 ```
@@ -269,14 +277,20 @@ V4本流の月次Chronicle（`OUTPUT_SCHEMA_CHRONICLE_V4` / `PROMPT_CHRONICLE_SY
 | :--- | :--- | :--- | :--- |
 | `chronicle.title` | string | 短い見出し（1,000字カウント枠外） | この一ヶ月を一言で表す歴史的表題。体言止め可。 |
 | `chronicle.monthly_summary` | string | ≤200字 | ③総括。月初月末・総資産推移・主要な変化を統合。結論を先に置く。 |
-| `chronicle.market_causality` | string | ④合計≤400字 | ④因果（市場レジーム）。MARKET_UNITS限定。Market Regime + Portfolio Movement + Phase Timeline を1ブロックに集約し、最大寄与（NYFANG中心）に絞る。 |
+| `chronicle.market_causality` | string | ④合計≤400字 | ④因果（市場レジーム）。MARKET_UNITS限定。Market Regime + Portfolio Movement + Phase Timeline を1ブロックに集約し、最大寄与銘柄・資産クラスに絞る。NYFANGは最大寄与に含まれる場合だけ中心として扱い、固定主語にしない。 |
 | `chronicle.phase_analysis` | string[] | ④合計≤400字 | ④因果（局面変化）。転換点と根拠を短く列挙。 |
 | `chronicle.asset_contribution` | string[] | ④合計≤400字 | ④因果（資産寄与）。寄与上位/足を引っ張った資産。寄与日・金額は1回に集約。金額丸め可。 |
 | `chronicle.portfolio_audit` | string | ≤250字 | ⑤監査。集中度・比率変化・方針維持の妥当性に絞る。 |
-| `chronicle.next_month_watch` | string[] | 3点・合計≤150字 | ⑥翌月の注視点。 |
-| `meta.data_quality` | string | 本文非表示 | TSMC fx_rate乖離・HOLIDAY_GUARD・daily_insights部分ログ等の監査ログ向け項目。値は生成・保持してよいが本文③〜⑥には出さない。 |
+| `chronicle.next_month_watch` | string[] | 3点・合計≤150字 | ⑥翌月の注視点。対象月データから継続観測すべき事実ベースの論点に限定し、騰落・イベント・投資行動の未来予測や不確実な示唆を書かない。 |
+| `meta.data_quality` | string | 本文非表示 / ヘッダ表示可 | TSMC fx_rate乖離・HOLIDAY_GUARD・daily_insights部分ログ等の監査ログ向け項目。値は生成・保持してよいが本文③〜⑥には出さない。`v4_chronicle.html` のヘッダ品質表示には表示する。 |
 
 > `market_causality + phase_analysis + asset_contribution` の3フィールドが④因果ブロックを構成し、合計で≤400字に収める。
+
+**実行時検証**:
+
+- `OUTPUT_SCHEMA_CHRONICLE_V4` はJSON Schema形で `<output_schema>` に埋め込み、`PROMPT_CHRONICLE_SYSTEM_V4` とUser payloadを結合した単一promptとして `LlmTransporter.request_intelligence(prompt)` へ委譲する。
+- 外部API側の structured outputs 強制は前提にせず、`MonthlyCurator.generate_v4_chronicle()` が受信後に `chronicle` / `meta` の存在、必須フィールド、`string` / `array<string>` の基本型を検証する。
+- 検証失敗時は `RuntimeError` とし、月次V4の不完全な本文をレンダリングしない。
 
 #### 字数制約（titleを除く本文③〜⑥合計 ≤1,000字）
 
@@ -292,7 +306,7 @@ V4本流の月次Chronicle（`OUTPUT_SCHEMA_CHRONICLE_V4` / `PROMPT_CHRONICLE_SY
 
 - **重複排除**: 同一の事実（例: +8.05% / テック主導 / ABSOLUTE_AMOUNT不変 / VIX17台）を複数セクションで繰り返さない。
 - **金額丸め可**: 桁の冗長な羅列を避け、可読性を優先する。
-- **data_quality本文除外**: `meta.data_quality` は監査ログ向けであり本文③〜⑥に混ぜない。
+- **data_quality本文除外**: `meta.data_quality` は監査ログおよびメールヘッダの短い品質表示向けであり本文③〜⑥に混ぜない。
 - **埋め戻し禁止**: 短縮して余白が生じても加筆しない。
 
 #### 1,000字カウント定義
@@ -333,7 +347,7 @@ V4本流の月次Chronicle（`OUTPUT_SCHEMA_CHRONICLE_V4` / `PROMPT_CHRONICLE_SY
 | **日次ノイズ排除** | 1日の騰落という些末なノイズを無視し、1ヶ月を通した「金利・価格・為替」の合力の推移を俯瞰する。 |
 | **未来予測禁止** | 未来への予測・不確実な示唆を一切禁ずる。 |
 | **ハルシネーション禁止** | `insight_stream` のテキスト内に明示的に存在しない歴史的事件・外部ニュース・過去の市場ショックの補完を完全に禁ずる。 |
-| **思考停止ワードの排除** | `CURATOR_BANNED_WORDS`（9語）は月次でも適用（→ §4.2参照）。 |
+| **思考停止ワードの排除** | 共通 `CURATOR_BANNED_WORDS`（8語）に、V4月次専用の `MONTHLY_CHRONICLE_BANNED_WORDS` では `検討` を加えた9語を `chronicle` 本文フィールドへ適用（→ §4.2参照）。 |
 
 ---
 
@@ -352,9 +366,9 @@ LLMレスポンスからのJSON抽出は以下の優先順位で処理する（`
 - パース前に制御文字（`[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]`）を正規表現で除去
 - `JSONDecodeError` 発生時はフォールバックレスポンスを採用
 
-### 4.2 禁止語強制（CURATOR_BANNED_WORDS）
+### 4.2 禁止語強制（CURATOR_BANNED_WORDS / MONTHLY_CHRONICLE_BANNED_WORDS）
 
-以下の9語を「思考停止ワード（分析の放棄）」として定義し、AI出力のパース後・返却前に強制検査する。
+共通 `CURATOR_BANNED_WORDS` は以下の8語を「思考停止ワード（分析の放棄）」として定義し、AI出力のパース後・返却前に強制検査する。
 
 | # | 禁止語 | 禁止の理由 |
 | :--- | :--- | :--- |
@@ -363,14 +377,16 @@ LLMレスポンスからのJSON抽出は以下の優先順位で処理する（`
 | 3 | 一旦 | 判断の先送り |
 | 4 | と思われる | 断言の回避 |
 | 5 | 一喜一憂 | 無内容な定型句 |
-| 6 | 検討 | 判断の先送り |
-| 7 | 見守り | 分析の放棄 |
-| 8 | ホールド | 判断の先送り |
-| 9 | 距離を置く | 分析の放棄 |
+| 6 | 見守り | 分析の放棄 |
+| 7 | ホールド | 判断の先送り |
+| 8 | 距離を置く | 分析の放棄 |
+
+V4月次専用 `MONTHLY_CHRONICLE_BANNED_WORDS` は、共通8語に `検討` を加えた9語とする。これは `MonthlyCurator.generate_v4_chronicle()` のV4検証だけで使い、日次CONTEXT、週次Chronicle、レガシー月次Chronicleの共通禁止語契約には波及させない。
 
 - 検出時: `RuntimeError` を発生させ、呼び出し元の例外ハンドラでフォールバック処理
 - 適用範囲（CONTEXT）: `theme_title` / `statement_headline` / `statement_body` / `insight` / `featured_assets[].caption` / `shield_evaluation` の全フィールド
-- 適用範囲（CHRONICLE）: `theme_title` / `chronicle_headline` / `chronicle_body` / `portfolio_audit.*` の全フィールド
+- 適用範囲（CHRONICLE legacy）: `theme_title` / `chronicle_headline` / `chronicle_body`
+- 適用範囲（CHRONICLE V4 / `MONTHLY_CHRONICLE_BANNED_WORDS`）: `chronicle.title` / `chronicle.monthly_summary` / `chronicle.market_causality` / `chronicle.phase_analysis[]` / `chronicle.asset_contribution[]` / `chronicle.portfolio_audit` / `chronicle.next_month_watch[]`
 
 ### 4.3 LLMプロバイダ委譲
 
@@ -387,6 +403,6 @@ LLMレスポンスからのJSON抽出は以下の優先順位で処理する（`
 | :--- | :--- |
 | `logic.md §5` | `TimelineController.get_us_market_context()` API仕様（休場判定の実装詳細） |
 | `system.md §4` | LLMプロバイダ設定・リトライ戦略・バックオフ詳細 |
-| `src/config/prompts.py` | 全プロンプトテンプレートの正本（`CURATOR_EXHIBITION_REPORT` / `MONTHLY_CHRONICLE_REPORT` / `CURATOR_BANNED_WORDS` / `EXHIBITION_THEMES`） |
+| `src/config/prompts.py` | 全プロンプトテンプレートの正本（`CURATOR_EXHIBITION_REPORT` / `MONTHLY_CHRONICLE_REPORT` / `CURATOR_BANNED_WORDS` / `MONTHLY_CHRONICLE_BANNED_WORDS` / `EXHIBITION_THEMES`） |
 
 ---

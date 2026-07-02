@@ -18,8 +18,8 @@
 * **Broker Audit**: Broker スクレイピングは必須データ取得ではなく、`legacy/v3/src/app/broker_auditor.py` による比較監査へ降格する。Broker が到達不能でも配信は止めず、`[AUDIT]` Warning として記録する。
 * **Monolithic Daily Mail**: `src/app/renderer/v4_content_renderer.py` が `ShadowLedger`、確定論的な日次コンテキスト、v3由来の Summary/Position 表示メトリクスを単一HTMLメールへ統合する。日次AI鑑定は廃止済みであり、常に確定論的コンテキストを使う（`-u` で既存キャッシュを再利用する場合を除く）。
 * **Daily Monthly Inputs**: v4日次は `data/current/daily_metrics_YYYYMMDD.json` と `data/current/market_snapshot_YYYYMMDD.json` を保存する。月次AIは `daily_metrics` と `market_snapshot` の両方を統合入力として使用する（`PROMPT_CHRONICLE_SYSTEM_V4` の `<input_contract>` 参照）。
-* **V4 Monthly Chronicle**: `MonthlyCurator.generate_v4_chronicle()` が月内の `ShadowLedger` 推移、`daily_metrics`、`market_snapshot`、必要最小限の Knowledge Base を統合し、`MARKET_UNITS` と `ABSOLUTE_AMOUNT` の因果境界を保った月次総括を生成する。`daily_metrics` が15件未満の月は既存の月次Chronicleへフォールバックする。
-* **V4 XML Prompt Guard**: `PROMPT_CONTEXT_SYSTEM_V4` / `PROMPT_CHRONICLE_SYSTEM_V4` は XML 構造化された System 指示として扱い、台帳・市場・月次推移データは User 側の専用タグへ分離する。
+* **V4 Monthly Chronicle**: `MonthlyCurator.generate_v4_chronicle()` が月内の `ShadowLedger` 推移、`daily_metrics`、`market_snapshot`、必要最小限の Knowledge Base を統合し、`MARKET_UNITS` と `ABSOLUTE_AMOUNT` の因果境界を保った月次総括を生成する。`daily_metrics` が15件未満の月は既存の月次Chronicleへフォールバックする。返却値はJSON Schema形の `OUTPUT_SCHEMA_CHRONICLE_V4` に基づき、トップレベル、必須フィールド、基本型を実行時に検証する。
+* **V4 XML Prompt Guard**: `PROMPT_CONTEXT_SYSTEM_V4` / `PROMPT_CHRONICLE_SYSTEM_V4` は XML 構造化された System 指示として扱い、台帳・市場・月次推移データは User 側の専用タグ（`<daily_metrics_summary>`, `<market_snapshot_summary>`, `<monthly_trend_data>`, `<output_schema>` 等）へ分離する。
 
 ### 1.2 Requirements V2 (Sovereign Transformation / Legacy)
 * **Target Scope**: 国内外の株式、投資信託、および現金同等物。

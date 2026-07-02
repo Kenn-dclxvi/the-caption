@@ -9,6 +9,7 @@ from src.app.notifier import Notifier
 from src.infra.ledger_repository import LedgerRepository
 from src.infra.knowledge_manager import KnowledgeManager
 from src.infra.daily_metrics_repository import DailyMetricsRepository
+from src.infra.market_snapshot_repository import MarketSnapshotRepository
 from src.lib.timeline_controller import TimelineController
 from src.domain.monthly_curator import MonthlyCurator
 from src.domain.monthly_guard import MonthlyGuardRail
@@ -32,6 +33,7 @@ class MonthlyEngine:
         self.__repo = LedgerRepository()
         self.__knowledge = KnowledgeManager()
         self.__daily_metrics_repo = DailyMetricsRepository()
+        self.__market_snapshot_repo = MarketSnapshotRepository()
         self.__timeline = TimelineController()
         self.__curator = MonthlyCurator()
         self.__guard = MonthlyGuardRail(self.__timeline, self.__repo)
@@ -67,6 +69,7 @@ class MonthlyEngine:
             year_month = target_dt.strftime("%Y-%m")
             ledger_dict = self.__repo.load(last_biz_day)
             daily_metrics = self.__daily_metrics_repo.load_month(year_month)
+            market_snapshots = self.__market_snapshot_repo.load_month(year_month)
 
             summary_vm: Optional[SummaryViewModel]
             if ledger_dict:
@@ -97,6 +100,7 @@ class MonthlyEngine:
                         year_month,
                         insights=insights,
                         daily_metrics=daily_metrics,
+                        market_snapshots=market_snapshots,
                         knowledge_manager=self.__knowledge,
                     )
                 else:
