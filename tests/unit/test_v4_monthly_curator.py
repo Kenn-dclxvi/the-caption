@@ -5,7 +5,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.domain.ledger_schema import ShadowAssetRecord, ShadowLedger
-from src.domain.monthly_curator import MonthlyCurator
+from src.domain.monthly_curator import (
+    MonthlyCurator,
+    V4ChronicleBannedWordsViolation,
+    V4ChronicleSchemaViolation,
+)
 
 
 def _load_real_prompts_module():
@@ -495,7 +499,7 @@ def test_generate_v4_chronicle_rejects_schema_mismatch() -> None:
 
         try:
             curator.generate_v4_chronicle("2026-04", shadow_ledgers=[], insights=[])
-        except RuntimeError as exc:
+        except V4ChronicleSchemaViolation as exc:
             assert "chronicle.phase_analysis type mismatch" in str(exc)
         else:
             raise AssertionError("schema mismatch was not rejected")
@@ -514,7 +518,7 @@ def test_generate_v4_chronicle_rejects_banned_words() -> None:
 
         try:
             curator.generate_v4_chronicle("2026-04", shadow_ledgers=[], insights=[])
-        except RuntimeError as exc:
+        except V4ChronicleBannedWordsViolation as exc:
             assert "Action Ban Violation" in str(exc)
             assert "様子見" in str(exc)
         else:

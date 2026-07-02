@@ -383,7 +383,8 @@ LLMレスポンスからのJSON抽出は以下の優先順位で処理する（`
 
 V4月次専用 `MONTHLY_CHRONICLE_BANNED_WORDS` は、共通8語に `検討` を加えた9語とする。これは `MonthlyCurator.generate_v4_chronicle()` のV4検証だけで使い、日次CONTEXT、週次Chronicle、レガシー月次Chronicleの共通禁止語契約には波及させない。
 
-- 検出時: `RuntimeError` を発生させ、呼び出し元の例外ハンドラでフォールバック処理
+- 検出時（CONTEXT / CHRONICLE legacy）: 共通禁止語契約の `RuntimeError` として扱い、呼び出し元の例外ハンドラでフォールバック処理
+- 検出時（CHRONICLE V4 / `MONTHLY_CHRONICLE_BANNED_WORDS`）: `V4ChronicleBannedWordsViolation` を発生させ、`MonthlyEngine.run()` の alert code は `V4_BANNED_WORD_MONTHLY` として一般 `OPERATIONAL_LIMIT_MONTHLY` から分離する
 - 適用範囲（CONTEXT）: `theme_title` / `statement_headline` / `statement_body` / `insight` / `featured_assets[].caption` / `shield_evaluation` の全フィールド
 - 適用範囲（CHRONICLE legacy）: `theme_title` / `chronicle_headline` / `chronicle_body`
 - 適用範囲（CHRONICLE V4 / `MONTHLY_CHRONICLE_BANNED_WORDS`）: `chronicle.title` / `chronicle.monthly_summary` / `chronicle.market_causality` / `chronicle.phase_analysis[]` / `chronicle.asset_contribution[]` / `chronicle.portfolio_audit` / `chronicle.next_month_watch[]`
