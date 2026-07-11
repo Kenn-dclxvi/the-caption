@@ -5,7 +5,8 @@ import pytest
 
 def test_v4_daily_main_help_does_not_expose_with_ai(capsys):
     with patch("sys.argv", ["v4_daily_main.py", "-h"]):
-        from src.app.entrypoints.v4_daily_main import main
+        with capsys.disabled():
+            from src.app.entrypoints.v4_daily_main import main
 
         with pytest.raises(SystemExit):
             main()

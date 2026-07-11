@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -107,7 +108,7 @@ def _ledger(total_return_jpy=100, diff_jpy=10, diff_pct=0.1):
 
 
 @pytest.fixture
-def harness():
+def harness(tmp_path):
     with patch("src.app.v4_engine.Notifier") as MockNotifier, \
          patch("src.app.v4_engine.TimelineController") as MockTimeline, \
          patch("src.app.v4_engine.GuardRail") as MockGuard, \
@@ -159,23 +160,42 @@ def harness():
         history_updater.fx_asset_names.return_value = {"USDJPY"}
 
         from src.app.v4_engine import V4PortfolioEngine
-        engine = V4PortfolioEngine()
-        yield engine, {
-            "notifier": MockNotifier.return_value,
-            "timeline": timeline,
-            "guard": guard,
-            "history_updater": history_updater,
-            "ingester": ingester,
-            "adapter": adapter,
-            "context_repo": context_repo,
-            "daily_metrics_repo": daily_metrics_repo,
-            "knowledge": knowledge,
-            "renderer": renderer,
-            "sender": sender,
-            "market_fetcher": market_fetcher,
-            "market_snapshot_repo": market_snapshot_repo,
-            "utils": MockUtils,
-        }
+
+        assert V4PortfolioEngine._V4PortfolioEngine__SHADOW_OUTPUT == "data/v4_shadow_ledger.json"
+        assert V4PortfolioEngine._V4PortfolioEngine__APPRAISAL_STATE_PATH == "data/runtime/v4_appraisal_state.json"
+
+        isolated_shadow_path = tmp_path / "data" / "v4_shadow_ledger.json"
+        isolated_appraisal_path = tmp_path / "data" / "runtime" / "v4_appraisal_state.json"
+        isolated_shadow_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with patch.object(
+            V4PortfolioEngine,
+            "_V4PortfolioEngine__SHADOW_OUTPUT",
+            str(isolated_shadow_path),
+        ), patch.object(
+            V4PortfolioEngine,
+            "_V4PortfolioEngine__APPRAISAL_STATE_PATH",
+            str(isolated_appraisal_path),
+        ):
+            engine = V4PortfolioEngine()
+            yield engine, {
+                "notifier": MockNotifier.return_value,
+                "timeline": timeline,
+                "guard": guard,
+                "history_updater": history_updater,
+                "ingester": ingester,
+                "adapter": adapter,
+                "context_repo": context_repo,
+                "daily_metrics_repo": daily_metrics_repo,
+                "knowledge": knowledge,
+                "renderer": renderer,
+                "sender": sender,
+                "market_fetcher": market_fetcher,
+                "market_snapshot_repo": market_snapshot_repo,
+                "utils": MockUtils,
+                "shadow_output": isolated_shadow_path,
+                "appraisal_state": isolated_appraisal_path,
+            }
 
 
 def test_v4_engine_dispatches_from_universal_ingester(harness):
@@ -187,7 +207,7 @@ def test_v4_engine_dispatches_from_universal_ingester(harness):
         target_date="2026-04-25",
         us_market_date="2026-04-24",
     )
-    mocks["ingester"].run.assert_called_once_with("2026-04-25", output_path="data/v4_shadow_ledger.json")
+    mocks["ingester"].run.assert_called_once_with("2026-04-25", output_path=str(mocks["shadow_output"]))
     mocks["daily_metrics_repo"].save.assert_called_once()
     saved_metrics = mocks["daily_metrics_repo"].save.call_args[0][0]
     assert saved_metrics["schema_version"] == "v4.1-daily-metrics"
@@ -203,6 +223,11 @@ def test_v4_engine_dispatches_from_universal_ingester(harness):
     mocks["knowledge"].record_insight.assert_not_called()
     mocks["sender"].send.assert_called_once_with("CAPTION [2026-04-25]", "<html>v4</html>")
     mocks["utils"].set_flag.assert_called_once()
+    assert mocks["shadow_output"].is_file()
+    persisted_shadow = json.loads(mocks["shadow_output"].read_text(encoding="utf-8"))
+    assert persisted_shadow["target_date"] == "2026-04-25"
+    assert persisted_shadow["total_value_jpy"] == 1000
+    assert persisted_shadow["assets"][0]["name"] == "FundA"
 
 
 def test_v4_engine_always_uses_deterministic_context_for_large_top_mover_value(harness):
@@ -260,6 +285,9 @@ def test_v4_engine_skips_daily_ai_for_negative_return_without_anomaly(harness):
 
     mocks["context_repo"].save.assert_not_called()
     mocks["knowledge"].record_insight.assert_not_called()
+    assert mocks["appraisal_state"].is_file()
+    persisted_appraisal = json.loads(mocks["appraisal_state"].read_text(encoding="utf-8"))
+    assert persisted_appraisal == {"last_displayed_date": "2026-04-25"}
 
 
 def test_v4_engine_reuses_cached_context_without_regenerating(harness):
@@ -302,7 +330,7 @@ def test_v4_engine_uses_today_when_target_date_is_omitted(harness):
         target_date="2026-04-27",
         us_market_date="2026-04-24",
     )
-    mocks["ingester"].run.assert_called_once_with("2026-04-27", output_path="data/v4_shadow_ledger.json")
+    mocks["ingester"].run.assert_called_once_with("2026-04-27", output_path=str(mocks["shadow_output"]))
     mocks["sender"].send.assert_called_once_with("CAPTION [2026-04-27]", "<html>v4</html>")
 
 
