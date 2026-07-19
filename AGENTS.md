@@ -1,58 +1,11 @@
-略語: 指示書=承認済み実装指示書、SA=サブエージェント、親=親エージェント
-用語: 境界項目=対象・範囲・完了条件・品質基準・実行許可
-詳細仕様: `docs/orchestration-process.md` / 設計理由: `docs/prompt-guide.md`
+# THE-CAPTION execution control
 
-## 役割
-- 親は指示書管理・SA起動・結果管理を行う。
-- 親は実装・修正・テスト・監査・PRレビュー相当の品質確認・指示書作成を直接行わない。
-- SA起動は `docs/orchestration-process.md` の SA利用ケースに該当する場合だけ行う。
-
-## 入力境界
-- 問題と境界項目は、ユーザー入力または指示書で明示された内容のみ採用する。
-- 問題・条件と境界項目を AI が補完してはならない。
-- 実行・修正許可の根拠は、指示書または作業単位化条件に限る。
-- 条件付き事前承認は、条件と境界項目が明示され、条件充足を推定なしで確認できる場合だけ作業単位化条件として扱う。
-- 条件付き事前承認テンプレートは、テンプレートID・条件・境界項目・除外操作を推定なしで一意に照合できる場合だけ作業単位化条件として扱う。
-- `commit` / `push` / `deploy` / 外部送信は、別途明示許可がない限り条件付き事前承認に含めない。
-- 矛盾時は指示書を優先する。
-- 明示された文書・差分の非破壊レビュー依頼は、親が明示対象に限り直接扱える。
-- リポジトリ参照は仕様・境界確認に限り、実行許可・修正範囲の判断はこの入力境界に従う。
-- プロジェクト固有の参照先は、対象リポジトリのオーバーレイまたは明示入力に従う。
-
-## 指示書草案
-- ユーザーが指示書作成を明示依頼した場合、または実装・変更の意図がありながら作業単位化に必要な境界項目を推定なしで確定できない場合、親は `prompts/plan.md` をロールプロンプトとして渡してプランSAを起動する。起動条件・非対象・安全不変条件は `docs/orchestration-process.md` のケースEに従う。
-- 草案は実行許可ではない。親は草案から実装SAへ自動で進まず、ユーザー入力で実行対象として明示された場合または作業単位化条件を満たす場合だけ作業単位化対象になる。
-
-## 作業単位化
-- 指示書または明示された作業単位化条件がある場合に限り、`target / scope / done / tests / stop` に整理して実装SAへ渡す。
-- 分解に AI側の補完が必要な場合は停止する。
-- コード変更を含む作業単位ではテストコマンド必須とする。ドキュメント・コメント・設定値のみなら `tests: なし（根拠）` 可とする。
-- 照合手順・`tests` の展開・可否の返却形式は `docs/orchestration-process.md` の作業単位化判定フローに従う。
-
-## SA起動と分離
-- 各SA起動時は、対応するロールプロンプト(`docs/orchestration-process.md` のサブエージェント起動の対応表)と禁止操作を起動メッセージに明示する。
-- 監査SAへは「指示書・差分・テスト結果・関連仕様」のみ渡す。実装経緯・背景・親の事前評価は渡さない。
-- レビューSAへも実装経緯・事前評価・他SAの指摘内容・判断理由を渡さない。起動ゲートとしての停止指摘0件の状況は渡してよい。
-- レビューSAは監査SAの停止指摘0件後に必ず起動し、非破壊で PRレビュー相当の品質確認を行う。
-- 多視点並列検証は、`docs/orchestration-process.md` が定める起動条件に該当する場合だけ起動し、高リスクを推定で判定しない。
-- 監査SAとレビューSAの指摘分類・ループ制御・継続判定は親が管理し、各分類の定義は `docs/orchestration-process.md` の指摘分類に従う。
-
-## 停止と自動再修正
-- 問題と境界項目を推定なしで確定でき、条件付き事前承認テンプレートや既定テスト定義を使う場合はIDで一意に照合でき、必要なロールプロンプトを渡せる場合だけ実装SAへ進む。いずれかを満たせない場合、または条件充足を推定で判断する必要がある場合は停止する。
-- テスト条件が未定義でテスト実行が必要な場合は停止する。
-- 自動再修正は、承認済み範囲に直接対応する監査SAの停止指摘、または承認済み範囲内かつ最小修正可能なレビューSAの重大指摘のみ対象とする。
-- レビューSAの改善指摘 / 補足 / 範囲外指摘は自動修正しない。
-- レビューSAの指摘は、親が作業単位化し直してから実装SAへ渡す。
-- 自動再修正試行は最大5回とし、5回目の再修正後も停止指摘または重大指摘が残る場合は停止し、6回目は開始しない。
-- 5回上限・同一指摘再発・停止条件でループを止める場合は、ボトルネック・反復している指摘・次に人間が判断すべき点を `docs/orchestration-process.md` の自動修正ループの様式で返す。
-
-## 完了判定
-- 完了判定は、実装SAの実装とテスト結果、監査SAの監査結果、レビューSAのレビュー結果が揃い、停止指摘0件かつ重大指摘0件の場合のみ成立する。
-
-## PR作成
-- PR の言語規約・原文保持・テンプレート追従は `docs/orchestration-process.md` の PR作成に従う。
-
-## 出力
-- 停止指摘(監査SA出力)と重大指摘(レビューSA出力)を引用し、自動再修正可否の判定根拠として明示する。
-- 要件達成後に未要求の提案・サジェスト・追加質問を付記しない。
-- 最終出力様式は `docs/orchestration-process.md` の親の最終出力様式に従う。
+- SPEC: 実行前にrequired outcomeをoperation identityへ分け、`predicate / criterion owner / permission / constraint`をTaskSpecへ固定する。`result / constraint / terminal`は同一operation identity内だけへbindし、別operation / task全体へ伝播させない。
+- PRODUCER: 初回predicate前に各operationへrootまたはworkerのproducer execution identityを一つbindする。同一operationのpredicate実行 / result生成を他producerへ順次・並行に割り当てない。TaskSpecが独立したproducer executionを明示した場合だけ、その指定identityをproducer role identityへbindする。criterion owner語列だけでproducerを選ばない。producer変更は理由を問わず旧bindingを失効し、新identityのTaskSpecで行う。
+- TERMINAL: 全predicateにbind済みproducerのterminal resultがある場合だけoperationをterminalにする。invocation / worker / sessionがnonterminal、またはresult欠落ならoperationもnonterminalとし、進行報告 / 集約結果 / final responseで補完しない。
+- CONTEXT: worker packetへ`criterion / owner / pass condition / TaskSpec該当範囲 / target identity / scoped diffまたはresult / required evidence / allowed read / forbidden input`を固定する。packetとallowed readで判定可能なら`fork_turns=none`とし、不足時だけ意味保持に必要な最小turn数を継承する。利便性、念のため、無関係なtool outputの参照可能性を全履歴継承の理由にしない。
+- OWNER_ROLE: criterion owner語列はnon-machine riskの担当情報として保持し、worker operationの指定には使わない。TaskSpecが独立したproducer executionを明示した場合だけ、起動前にそのexecution identityをtask identityとしてproducerへbindし、predicate前に対応workerを起動する。`delegated_result_ready := runtime_spawn_result.task_name == task identity ∧ FINAL_ANSWER.Sender == task identity ∧ final resultをcriterion / target artifactまたはproposed response identityへbind可能`。`wait`は同期専用でidentity証跡にしない。`delegated_result_ready=false`の間はcriterionをpassedにせず、producer terminal後も`delegated_result_ready=false`ならcriterionを`unavailable`にする。bind済みcriterionの`false / failed`はそのoperationのterminal resultとして保持し、別operationのbind済みresultを失効させない。root宣言 / 進行記述 / 異Sender message / root再構成による補完は禁止する。
+- ROOT: rootがproducerでないoperationではpacket構築 / result binding / terminal集約だけを行い、predicate実行 / result再生成をしない。
+- INDEPENDENCE: 先行result / artifactを対象とする別operationへ固有predicate / owner / producerを実行前に固定する。同一predicateを別producerへ再割当てしない。
+- METHOD: TaskSpec明示手段だけを固定する。未固定手段はpredicateを変えずpermission内でexecutorが選ぶ。invocationのfailed / unavailableをpermission否定 / terminalにせず、未固定手段があれば同一predicateへ向けて継続する。明示禁止 / permission否定は停止し、回避しない。
+- RECOVERY: 同一operationの`environment recovery := environment-only repair + same required command rerun`。組の開始時だけ`environment_recovery_max`を消費し、未固定手段の選択は数えない。
