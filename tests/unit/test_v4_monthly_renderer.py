@@ -11,10 +11,10 @@ def _v4_monthly_data() -> dict:
             "title": "静かな構造転換",
             "monthly_summary": "一ヶ月の潮流を鑑定します。",
             "market_causality": "ABSOLUTE_AMOUNTは市場要因から切り離して扱います。",
-            "phase_analysis": ["月央にVIXが落ち着きました。"],
-            "asset_contribution": ["US_STOCKが寄与しました。"],
+            "phase_analysis": ["月央にVIXが落ち着きました。", "月末に別の転換がありました。"],
+            "asset_contribution": ["US_STOCKが寄与しました。", "CASHが下支えしました。"],
             "portfolio_audit": "集中度と現金比率を確認します。",
-            "next_month_watch": ["VIX水準の継続観測"],
+            "next_month_watch": ["VIX水準の継続観測", "集中度の変化", "3点目は表示しない"],
         },
         "meta": {
             "year_month": "2026-04",
@@ -39,6 +39,20 @@ def _v4_monthly_data() -> dict:
                     "end_value_jpy": 60000,
                     "change_jpy": 10000,
                     "end_share_pct": 33.33,
+                },
+                {
+                    "source": "MARKET_UNITS",
+                    "asset_class": "EU_STOCK",
+                    "end_value_jpy": 50000,
+                    "change_jpy": -30000,
+                    "end_share_pct": 10.0,
+                },
+                {
+                    "source": "ABSOLUTE_AMOUNT",
+                    "asset_class": "GOLD",
+                    "end_value_jpy": 40000,
+                    "change_jpy": 5000,
+                    "end_share_pct": 8.0,
                 },
             ],
         },
@@ -74,12 +88,31 @@ def test_render_v4_monthly_chronicle_uses_slate_symphony_template() -> None:
 
     assert "V4 Monthly Chronicle / 2026-04" in html
     assert "静かな構造転換" in html
-    assert "Market Regime" in html
-    assert "Portfolio Movement" in html
-    assert "Portfolio Audit" in html
-    assert "HAS_MISSING_PRICING" in html
+    assert "Monthly Conclusion" in html
+    assert "Portfolio Impact" in html
+    assert "Policy &amp; Watch" in html
+    assert "Market Regime" not in html
+    assert "Portfolio Movement" not in html
+    assert "Phase Timeline" not in html
+    assert "Portfolio Audit" not in html
+    assert "Next Month Watch" not in html
+    assert "Ledger Days" not in html
+    assert "Total Change" not in html
+    assert "CALM" not in html
+    assert "TECH_DRIVEN" not in html
+    assert "LOW" not in html
+    assert "HAS_MISSING_PRICING" not in html
+    assert "US_STOCKが寄与しました。" in html
+    assert "CASHが下支えしました。" in html
+    assert "月央にVIXが落ち着きました。" in html
+    assert "月末に別の転換がありました。" not in html
+    assert "VIX水準の継続観測" in html
+    assert "集中度の変化" in html
+    assert "3点目は表示しない" not in html
+    assert "MARKET_UNITS / 10.00% / -30,000 JPY" in html
     assert "MARKET_UNITS / 66.67% / +20,000 JPY" in html
     assert "ABSOLUTE_AMOUNT / 33.33% / +10,000 JPY" in html
+    assert "ABSOLUTE_AMOUNT / 8.00% / +5,000 JPY" not in html
     assert "font-weight:300" in html
     assert "margin-bottom:60px" in html
     assert "Safe Ratio" not in html

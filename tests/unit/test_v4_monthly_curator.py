@@ -313,13 +313,13 @@ def test_generate_v4_chronicle_summarizes_market_snapshot_boundaries() -> None:
     assert non_dict_us_market["market_observations"]["vix"] == {"level": 17.5, "change": None}
 
 
-# --- 本文③〜⑥ 1,000字カウント定義の検証（titleは枠外） ---
+# --- 3ブロック600字カウント定義の検証（titleは枠外） ---
 #
-# カウント定義（docs/reference/prompts.md §3.4「1,000字カウント定義」と整合）:
-#   - 対象は③〜⑥（titleは枠外）: ③monthly_summary
-#            / ④market_causality + phase_analysis + asset_contribution
-#            / ⑤portfolio_audit / ⑥next_month_watch
-#   - ②title は1,000字カウントの枠外（対象外）。
+# カウント定義（docs/reference/prompts.md §3.4「600字カウント定義」と整合）:
+#   - 対象は①monthly_summary + market_causality
+#            / ②asset_contribution + phase_analysis
+#            / ③portfolio_audit + next_month_watch
+#   - title は600字カウントの枠外（対象外）。
 #   - MonthlyRenderer.__html_text / __render_v4_list が生成するHTMLからタグを除去した
 #     可読テキストを対象とする。
 #   - 改行・空白、および __render_v4_list の区切り文字 " / " は数えない。
@@ -329,7 +329,7 @@ _TAG_RE = re.compile(r"<[^>]*>")
 
 
 def _readable_len(chronicle: dict) -> int:
-    """本文③〜⑥の可読テキストを 1,000字カウント定義に従って合計する（titleは枠外）。
+    """3ブロックの可読テキストを600字カウント定義に従って合計する（titleは枠外）。
 
     report_monthly.py の __html_text / __render_v4_list と整合する形で:
       - 文字列フィールド (title / monthly_summary / market_causality / portfolio_audit)
@@ -339,11 +339,10 @@ def _readable_len(chronicle: dict) -> int:
     最後にタグ除去・改行/空白/" / " 除外のうえ文字数を数える。
     """
     parts: list[str] = []
-    # 対象は③〜⑥（titleは枠外）。②title は 1,000字カウント枠外のため合計対象に含めない。
-    # ③ monthly_summary
+    # ① Monthly Conclusion
     parts.append(str(chronicle.get("monthly_summary") or chronicle.get("overview", "")))
-    # ④ market_causality + phase_analysis + asset_contribution
     parts.append(str(chronicle.get("market_causality", "")))
+    # ② Portfolio Impact
     for row in chronicle.get("phase_analysis", []):
         if isinstance(row, dict):
             parts.append(" / ".join(str(v) for v in row.values() if v not in (None, "")))
@@ -354,9 +353,8 @@ def _readable_len(chronicle: dict) -> int:
             parts.append(" / ".join(str(v) for v in row.values() if v not in (None, "")))
         else:
             parts.append(str(row))
-    # ⑤ portfolio_audit
+    # ③ Policy & Watch
     parts.append(str(chronicle.get("portfolio_audit") or chronicle.get("structural_change", "")))
-    # ⑥ next_month_watch
     for row in chronicle.get("next_month_watch", []):
         if isinstance(row, dict):
             parts.append(" / ".join(str(v) for v in row.values() if v not in (None, "")))
@@ -373,23 +371,23 @@ def _readable_len(chronicle: dict) -> int:
     return len(joined)
 
 
-def test_v4_chronicle_body_within_1000_chars() -> None:
-    # 各セクションを配分上限近辺の日本語テキストで埋めた固定サンプル
-    # ③≤200 / ④≤400(3フィールド合計) / ⑤≤250 / ⑥≤150
+def test_v4_chronicle_body_within_600_chars() -> None:
+    # 各ブロックを配分上限近辺の日本語テキストで埋めた固定サンプル
+    # ①≤150 / ②≤250 / ③≤200
     chronicle = {
-        "title": "静かな構造転換の月",  # 1,000字カウント枠外
-        "monthly_summary": "あ" * 195,  # ③ ≤200字
-        "market_causality": "い" * 200,  # ④ 内訳1
-        "phase_analysis": ["う" * 100],  # ④ 内訳2
-        "asset_contribution": ["え" * 95],  # ④ 内訳3 → ④合計 395 ≤400
-        "portfolio_audit": "お" * 245,  # ⑤ ≤250字
-        "next_month_watch": ["か" * 50, "き" * 50, "く" * 45],  # ⑥ 145 ≤150（" / "は数えない）
+        "title": "静かな構造転換の月",  # 600字カウント枠外
+        "monthly_summary": "あ" * 90,
+        "market_causality": "い" * 55,  # ①合計145 ≤150
+        "phase_analysis": ["う" * 100],
+        "asset_contribution": ["え" * 145],  # ②合計245 ≤250
+        "portfolio_audit": "お" * 145,
+        "next_month_watch": ["か" * 25, "き" * 25],  # ③合計195 ≤200
     }
 
     total = _readable_len(chronicle)
-    # ③195 + ④395 + ⑤245 + ⑥145 = 980 ≤ 1000
-    assert total == 980
-    assert total <= 1000
+    # ①145 + ②245 + ③195 = 585 ≤ 600
+    assert total == 585
+    assert total <= 600
 
 
 def test_v4_chronicle_count_excludes_separators_tags_and_whitespace() -> None:
@@ -405,7 +403,7 @@ def test_v4_chronicle_count_excludes_separators_tags_and_whitespace() -> None:
     }
     # 8 + 6 + 3 + 3 = 20
     assert _readable_len(chronicle) == 20
-    assert _readable_len(chronicle) <= 1000
+    assert _readable_len(chronicle) <= 600
 
 
 def test_prompt_chronicle_system_v4_carries_length_constraints() -> None:
@@ -417,18 +415,18 @@ def test_prompt_chronicle_system_v4_carries_length_constraints() -> None:
     """
     prompt = _load_real_prompts_module().PROMPT_CHRONICLE_SYSTEM_V4
 
-    # 本文長制約（1,000字以内）の存在
-    assert "1,000字" in prompt
-    # 字数配分: ③≤200 / ④≤400 / ⑤≤250 / ⑥≤150
-    assert "≤200字" in prompt
-    assert "≤400字" in prompt
-    assert "≤250字" in prompt
+    # 本文長制約（600字以内）と3ブロック配分の存在
+    assert "600字" in prompt
     assert "≤150字" in prompt
-    # title は1,000字カウントの枠外である旨
+    assert "≤250字" in prompt
+    assert "≤200字" in prompt
+    assert "最大3項目" in prompt
+    assert "最大2項目" in prompt
+    # title は600字カウントの枠外である旨
     assert "枠外" in prompt
-    # data_quality を本文に出さない旨
+    # data_quality をメールに出さない旨
     assert "data_quality" in prompt
-    assert "本文③〜⑥には出すな" in prompt
+    assert "メールには出すな" in prompt
     assert "market_snapshot_summary" in prompt
     assert "next_month_watchは翌月の予測ではない" in prompt
     assert "固定主語として強制してはならない" in prompt

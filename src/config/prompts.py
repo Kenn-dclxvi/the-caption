@@ -247,34 +247,34 @@ OUTPUT_SCHEMA_CHRONICLE_V4 = {
             "properties": {
                 "title": {
                     "type": "string",
-                    "description": "この一ヶ月を一言で表す歴史的表題。短い見出し（体言止め可）。本文1,000字カウントの枠外。",
+                    "description": "この一ヶ月を一言で表す歴史的表題。短い見出し（体言止め可）。本文600字カウントの枠外。",
                 },
                 "monthly_summary": {
                     "type": "string",
-                    "description": "③総括。月初月末、総資産推移、主要な変化を統合する。結論を先に置き、≤200字に収める。",
+                    "description": "①今月の結論。月初月末、総資産推移、主要な変化を結論先行で示す。market_causalityと合わせて≤150字。",
                 },
                 "market_causality": {
                     "type": "string",
-                    "description": "④因果（市場レジーム）。MARKET_UNITSに限定した月間の市場因果。Market Regime + Portfolio Movement + Phase Timeline を1ブロックに集約し、月間寄与上位に絞る。phase_analysis・asset_contributionと合わせ合計≤400字。寄与日・金額の多重掲載は1回に集約。数値は丸めてよい。",
+                    "description": "①今月の結論を支える最大の市場要因。MARKET_UNITSに限定し、monthly_summaryと合わせて≤150字。同じ事実を繰り返さない。",
                 },
                 "phase_analysis": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "④因果（局面変化）。月内の転換点と根拠を短く列挙。market_causality・asset_contributionと合計≤400字。最大寄与に絞り、同一事象の繰り返しを避ける。",
+                    "description": "②資産への影響。明確な月内転換がある場合だけ、その転換点と根拠を短く列挙する。asset_contributionと合わせて最大3項目・≤250字。明確な転換がなければ空配列とする。",
                 },
                 "asset_contribution": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "④因果（資産寄与）。月間寄与上位または足を引っ張った資産・資産クラス。market_causality・phase_analysisと合計≤400字。寄与日・金額は1回に集約し、月間寄与上位に絞る。金額は丸め可。",
+                    "description": "②資産への影響。月間寄与上位または足を引っ張った資産・資産クラスに絞る。phase_analysisと合わせて最大3項目・≤250字。寄与日・金額は1回に集約し、金額は丸めてよい。",
                 },
                 "portfolio_audit": {
                     "type": "string",
-                    "description": "⑤監査。集中度・比率変化・方針維持の妥当性に絞る。≤250字。",
+                    "description": "③方針と注視点。冒頭で「方針維持」または「再確認が必要」と判定し、集中度・比率変化・方針の妥当性を簡潔に示す。next_month_watchと合わせて≤200字。",
                 },
                 "next_month_watch": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "⑥翌月の注視点。提供済み月次データから継続観測すべき事実ベースの論点を3点に厳選し、予測・示唆ではなく観測項目として合計≤150字に収める。",
+                    "description": "③方針と注視点。提供済み月次データから継続観測すべき事実ベースの論点を最大2点に厳選する。予測・示唆ではなく観測項目とし、portfolio_auditと合わせて≤200字。",
                 },
             },
         },
@@ -295,7 +295,7 @@ OUTPUT_SCHEMA_CHRONICLE_V4 = {
                 "risk_temperature": {"type": "string", "description": "月間リスク温度"},
                 "data_quality": {
                     "type": "string",
-                    "description": "欠損・休場・未確定データの扱い。本文③〜⑥には用いず、監査ログおよびメールヘッダの短い品質表示にのみ用いる。",
+                    "description": "欠損・休場・未確定データの扱い。メールには表示せず、監査ログにのみ用いる。",
                 },
             },
         },
@@ -326,9 +326,10 @@ PROMPT_CHRONICLE_SYSTEM_V4 = """
 </tone_constraints>
 
 <length_constraints>
-  <rule>結論+リスク重視の簡潔版で記述せよ。titleを除く本文③〜⑥（monthly_summary / market_causality + phase_analysis + asset_contribution / portfolio_audit / next_month_watch）の可読テキスト合計を1,000字以内に収めよ。titleは1,000字カウントの枠外とする。</rule>
-  <rule>字数配分: ③monthly_summary ≤200字 / ④因果ブロック(market_causality + phase_analysis + asset_contribution の合計) ≤400字 / ⑤portfolio_audit ≤250字 / ⑥next_month_watch ≤150字。titleは短い見出しとし、1,000字カウントの枠外とする。</rule>
-  <rule>④因果は Market Regime + Portfolio Movement + Phase Timeline を1ブロックに集約し、最大寄与銘柄・資産クラスに絞れ。NYFANGは最大寄与に含まれる場合だけ中心として扱い、固定主語として強制してはならない。寄与日・金額の多重掲載は1回に集約せよ。</rule>
+  <rule>結論+リスク重視の簡潔版で記述せよ。titleを除く3ブロック（Monthly Conclusion / Portfolio Impact / Policy &amp; Watch）の可読テキスト合計を600字以内に収めよ。titleは600字カウントの枠外とする。</rule>
+  <rule>字数配分: ①Monthly Conclusion（monthly_summary + market_causality）≤150字 / ②Portfolio Impact（asset_contribution + phase_analysis）≤250字 / ③Policy &amp; Watch（portfolio_audit + next_month_watch）≤200字。</rule>
+  <rule>②Portfolio Impactはasset_contributionとphase_analysisを合わせて最大3項目とし、最大寄与銘柄・資産クラスに絞れ。明確な転換がある場合だけphase_analysisを含め、なければ空配列とせよ。NYFANGは最大寄与に含まれる場合だけ中心として扱い、固定主語として強制してはならない。寄与日・金額の多重掲載は1回に集約せよ。</rule>
+  <rule>③portfolio_auditは「方針維持」または「再確認が必要」の判定から始めよ。next_month_watchは最大2項目とせよ。</rule>
   <rule>短縮して余白が生じても、埋め戻し（加筆）は禁止する。結論とリスクに絞り、簡潔さを優先せよ。</rule>
 </length_constraints>
 
@@ -338,7 +339,7 @@ PROMPT_CHRONICLE_SYSTEM_V4 = """
 </dedup_constraints>
 
 <data_quality_constraints>
-  <rule>meta.data_quality（TSMC fx_rate乖離・HOLIDAY_GUARD・daily_insightsの部分ログ等）は監査ログおよびメールヘッダの短い品質表示向けであり、本文③〜⑥には出すな。値は生成・保持してよいが、本文ナラティブに混ぜてはならない。</rule>
+  <rule>meta.data_quality（TSMC fx_rate乖離・HOLIDAY_GUARD・daily_insightsの部分ログ等）は監査ログ専用であり、メールには出すな。値は生成・保持してよいが、本文ナラティブに混ぜてはならない。</rule>
 </data_quality_constraints>
 
 <forecast_boundary>

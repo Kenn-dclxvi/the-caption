@@ -254,19 +254,19 @@ V4本流の月次Chronicle（`OUTPUT_SCHEMA_CHRONICLE_V4` / `PROMPT_CHRONICLE_SY
 {
   "chronicle": {
     "title": "この一ヶ月を一言で表す歴史的表題（短い見出し）",
-    "monthly_summary": "③総括（≤200字）",
-    "market_causality": "④因果（市場レジーム。MARKET_UNITS限定）",
-    "phase_analysis": ["④因果（局面変化の列挙）"],
-    "asset_contribution": ["④因果（資産寄与の列挙）"],
-    "portfolio_audit": "⑤監査（≤250字）",
-    "next_month_watch": ["⑥翌月の注視点（3点・合計≤150字。予測ではなく継続観測項目）"]
+    "monthly_summary": "①今月の結論",
+    "market_causality": "①結論を支える最大の市場要因（monthly_summaryと合計≤150字）",
+    "phase_analysis": ["②明確な局面変化がある場合だけ列挙"],
+    "asset_contribution": ["②資産寄与（phase_analysisと合わせて最大3項目・合計≤250字）"],
+    "portfolio_audit": "③方針判定",
+    "next_month_watch": ["③翌月の注視点（最大2点。portfolio_auditと合計≤200字）"]
   },
   "meta": {
     "dominant_regime": "月間の主要レジーム",
     "primary_causality": "月間主因",
     "fx_impact": "為替影響",
     "risk_temperature": "月間リスク温度",
-    "data_quality": "欠損・休場・未確定データの扱い（監査ログおよびメールヘッダ向け。本文③〜⑥には用いない）"
+    "data_quality": "欠損・休場・未確定データの扱い（監査ログ専用。メールには表示しない）"
   }
 }
 ```
@@ -275,16 +275,16 @@ V4本流の月次Chronicle（`OUTPUT_SCHEMA_CHRONICLE_V4` / `PROMPT_CHRONICLE_SY
 
 | フィールド | 型 | 制約 | 内容 |
 | :--- | :--- | :--- | :--- |
-| `chronicle.title` | string | 短い見出し（1,000字カウント枠外） | この一ヶ月を一言で表す歴史的表題。体言止め可。 |
-| `chronicle.monthly_summary` | string | ≤200字 | ③総括。月初月末・総資産推移・主要な変化を統合。結論を先に置く。 |
-| `chronicle.market_causality` | string | ④合計≤400字 | ④因果（市場レジーム）。MARKET_UNITS限定。Market Regime + Portfolio Movement + Phase Timeline を1ブロックに集約し、最大寄与銘柄・資産クラスに絞る。NYFANGは最大寄与に含まれる場合だけ中心として扱い、固定主語にしない。 |
-| `chronicle.phase_analysis` | string[] | ④合計≤400字 | ④因果（局面変化）。転換点と根拠を短く列挙。 |
-| `chronicle.asset_contribution` | string[] | ④合計≤400字 | ④因果（資産寄与）。寄与上位/足を引っ張った資産。寄与日・金額は1回に集約。金額丸め可。 |
-| `chronicle.portfolio_audit` | string | ≤250字 | ⑤監査。集中度・比率変化・方針維持の妥当性に絞る。 |
-| `chronicle.next_month_watch` | string[] | 3点・合計≤150字 | ⑥翌月の注視点。対象月データから継続観測すべき事実ベースの論点に限定し、騰落・イベント・投資行動の未来予測や不確実な示唆を書かない。 |
-| `meta.data_quality` | string | 本文非表示 / ヘッダ表示可 | TSMC fx_rate乖離・HOLIDAY_GUARD・daily_insights部分ログ等の監査ログ向け項目。値は生成・保持してよいが本文③〜⑥には出さない。`v4_chronicle.html` のヘッダ品質表示には表示する。 |
+| `chronicle.title` | string | 短い見出し（600字カウント枠外） | この一ヶ月を一言で表す歴史的表題。体言止め可。 |
+| `chronicle.monthly_summary` | string | ①合計≤150字 | ①今月の結論。月初月末・総資産推移・主要な変化を結論先行で示す。 |
+| `chronicle.market_causality` | string | ①合計≤150字 | ①結論を支える最大の市場要因。MARKET_UNITSに限定し、`monthly_summary`と同じ事実を繰り返さない。 |
+| `chronicle.phase_analysis` | string[] | ②合計≤250字 | ②資産への影響。明確な月内転換がある場合だけ、その転換点と根拠を列挙する。明確な転換がなければ空配列とする。 |
+| `chronicle.asset_contribution` | string[] | ②合計≤250字 | ②資産への影響。寄与上位または足を引っ張った資産に絞る。`phase_analysis`と合わせて最大3項目。 |
+| `chronicle.portfolio_audit` | string | ③合計≤200字 | ③方針と注視点。「方針維持」または「再確認が必要」の判定を先に置き、集中度・比率変化・方針の妥当性を示す。 |
+| `chronicle.next_month_watch` | string[] | 最大2点・③合計≤200字 | ③方針と注視点。対象月データから継続観測すべき事実ベースの論点に限定し、未来予測や不確実な示唆を書かない。 |
+| `meta.data_quality` | string | メール非表示 | TSMC fx_rate乖離・HOLIDAY_GUARD・daily_insights部分ログ等の監査ログ専用項目。値は生成・保持するが、メールのヘッダおよび本文には表示しない。 |
 
-> `market_causality + phase_analysis + asset_contribution` の3フィールドが④因果ブロックを構成し、合計で≤400字に収める。
+表示は `Monthly Conclusion`、`Portfolio Impact`、`Policy & Watch` の3ブロックに統合する。既存キャッシュの表示も、影響項目は最大3件、資産クラス推移は変動額上位3件、翌月の注視点は最大2件に制限する。
 
 **実行時検証**:
 
@@ -292,30 +292,31 @@ V4本流の月次Chronicle（`OUTPUT_SCHEMA_CHRONICLE_V4` / `PROMPT_CHRONICLE_SY
 - 外部API側の structured outputs 強制は前提にせず、`MonthlyCurator.generate_v4_chronicle()` が受信後に `chronicle` / `meta` の存在、必須フィールド、`string` / `array<string>` の基本型を検証する。
 - 検証失敗時は `V4ChronicleSchemaViolation`、禁止語検出時は `V4ChronicleBannedWordsViolation` とし、月次V4の不完全な本文をレンダリングしない。どちらも `RuntimeError` 派生だが、`MonthlyEngine.run()` は alert code を `V4_SCHEMA_VIOLATION_MONTHLY` / `V4_BANNED_WORD_MONTHLY` として一般 `OPERATIONAL_LIMIT_MONTHLY` から分離する。
 
-#### 字数制約（titleを除く本文③〜⑥合計 ≤1,000字）
+#### 字数制約（titleを除く3ブロック合計 ≤600字）
 
-「結論+リスク重視」の簡潔版を採用し、短縮分への加筆（余白の埋め戻し）はしない。titleは1,000字カウントの枠外とし、本文③〜⑥の可読日本語テキスト合計を **1,000字以内** に収める。各セクションの配分は以下のとおり。
+「結論+リスク重視」の簡潔版を採用し、短縮分への加筆（余白の埋め戻し）はしない。titleは600字カウントの枠外とし、3ブロックの可読日本語テキスト合計を **600字以内** に収める。各ブロックの配分は以下のとおり。
 
 | セクション | フィールド | 配分上限 |
 | :--- | :--- | :--- |
-| ②タイトル | `title` | 短い見出し（1,000字カウント枠外） |
-| ③総括 | `monthly_summary` | ≤200字 |
-| ④因果ブロック | `market_causality` + `phase_analysis` + `asset_contribution`（合計） | ≤400字 |
-| ⑤監査 | `portfolio_audit` | ≤250字 |
-| ⑥翌月の注視点 | `next_month_watch`（3点） | ≤150字 |
+| タイトル | `title` | 短い見出し（600字カウント枠外） |
+| ①今月の結論 | `monthly_summary` + `market_causality` | ≤150字 |
+| ②資産への影響 | `asset_contribution` + `phase_analysis`（最大3項目） | ≤250字 |
+| ③方針と注視点 | `portfolio_audit` + `next_month_watch`（最大2点） | ≤200字 |
 
 - **重複排除**: 同一の事実（例: +8.05% / テック主導 / ABSOLUTE_AMOUNT不変 / VIX17台）を複数セクションで繰り返さない。
 - **金額丸め可**: 桁の冗長な羅列を避け、可読性を優先する。
-- **data_quality本文除外**: `meta.data_quality` は監査ログおよびメールヘッダの短い品質表示向けであり本文③〜⑥に混ぜない。
+- **局面変化の条件表示**: `phase_analysis` は明確な月内転換がある場合だけ生成・表示する。
+- **資産クラス上限**: メールに表示する資産クラス推移は変動額の絶対値が大きい上位3件に限定する。
+- **data_qualityメール除外**: `meta.data_quality` は監査ログ専用とし、メールのヘッダおよび本文には表示しない。
 - **埋め戻し禁止**: 短縮して余白が生じても加筆しない。
 
-#### 1,000字カウント定義
+#### 600字カウント定義
 
-字数はtitleを除く本文③〜⑥の **可読日本語テキスト** に対して、以下の規則で数える。
+字数はtitleを除く3ブロックの **可読日本語テキスト** に対して、以下の規則で数える。
 
-- 対象: ③`monthly_summary` / ④`market_causality` + `phase_analysis` + `asset_contribution` / ⑤`portfolio_audit` / ⑥`next_month_watch`。
-- ②`title` は短い見出しであり、1,000字カウントの **枠外**（対象外）。
-- ①KPIヘッダ（trend rows / Safe Ratio等のメタ数値）と⑦フッタは **対象外**。
+- 対象: ①`monthly_summary` + `market_causality` / ②`asset_contribution` + `phase_analysis` / ③`portfolio_audit` + `next_month_watch`。
+- `title` は短い見出しであり、600字カウントの **枠外**（対象外）。
+- KPI（Safe Ratioや資産クラス推移等のメタ数値）とフッタは **対象外**。
 - `MonthlyRenderer.__html_text` / `__render_v4_list` で生成されるHTMLからタグ（`<br>` 等）を **除去** したテキストを対象とする。
 - 改行・空白、および `__render_v4_list` の区切り文字 `" / "` は **数えない**。
 - `meta.data_quality` 等のメタ項目は本文ではないため対象外。
@@ -324,7 +325,7 @@ V4本流の月次Chronicle（`OUTPUT_SCHEMA_CHRONICLE_V4` / `PROMPT_CHRONICLE_SY
 
 #### レガシー3フィールド版（旧スキーマ）
 
-旧レガシー経路（`MONTHLY_CHRONICLE_REPORT`、`daily_metrics` 15件未満フォールバック）では、以下の3フィールド・350字制約スキーマを用いる。V4本流とは別系統であり、本節の1,000字制約は適用されない。
+旧レガシー経路（`MONTHLY_CHRONICLE_REPORT`、`daily_metrics` 15件未満フォールバック）では、以下の3フィールド・350字制約スキーマを用いる。V4本流とは別系統であり、本節の600字制約は適用されない。
 
 ```json
 {

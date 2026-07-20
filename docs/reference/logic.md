@@ -118,6 +118,8 @@ GuardRail は `target_date` が `is_holiday()` = `True` の場合、以下のロ
 
 月次 CHRONICLE の `render_v4` はメール先頭に `Safe Ratio` セクションを表示する（描画は `MonthlyRenderer.__render_v4_safe_ratio()`）。旧 `Shield Review`（金・銀・プラチナの防壁評価）セクションは月次v4から削除された（#281）。
 
+本文は `Monthly Conclusion`（今月の結論）、`Portfolio Impact`（資産への影響）、`Policy & Watch`（方針と注視点）の3ブロックで表示する。本文はtitleを除いて合計600字以内とする。既存キャッシュを再利用する場合も、影響項目は最大3件、資産クラス推移は変動額上位3件、翌月の注視点は最大2件に制限する。
+
 | 入力 | 取り扱い |
 | :--- | :--- |
 | `MARKET_UNITS` | 市場環境に由来する動的資産の月次潮流として扱う |
@@ -128,7 +130,7 @@ GuardRail は `target_date` が `is_holiday()` = `True` の場合、以下のロ
 
 LLM には `PROMPT_CHRONICLE_SYSTEM_V4` と、`<output_schema>` に埋め込んだJSON Schema形の `OUTPUT_SCHEMA_CHRONICLE_V4` を含む単一promptを `LlmTransporter.request_intelligence()` で渡す。戻り値は `{"chronicle": ..., "meta": ...}` の形で V4 月次テンプレートへ接続できる。`MonthlyCurator.generate_v4_chronicle()` は受信後にトップレベル、必須フィールド、基本型を検証し、不一致の場合は月次V4本文として採用しない。schema violation と banned words violation は V4 専用例外として `MonthlyEngine.run()` に伝搬し、alert code を `V4_SCHEMA_VIOLATION_MONTHLY` / `V4_BANNED_WORD_MONTHLY` に分離する。
 月次の User データも `<daily_metrics_summary>`, `<market_snapshot_summary>`, `<daily_insights>`, `<monthly_trend_data>`, `<output_schema>` に分離し、`ABSOLUTE_AMOUNT` の増減は家計・運用の構造変化として扱う。
-方針監査（`Portfolio Audit`）はこの月次フェーズで表示・解釈する。
+方針監査（`portfolio_audit`）は `Policy & Watch` ブロックで表示・解釈する。
 
 **COLLECTION Execution Flow (Legacy Standalone COLLECTIONパイプライン)**
 

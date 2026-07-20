@@ -117,8 +117,6 @@ class MonthlyRenderer(BaseRenderer):
 
         chronicle = data.get("chronicle", {})
         meta = data.get("meta", {})
-        total_delta = meta.get("total_change_jpy", 0)
-        total_delta_pct = meta.get("total_change_pct", 0.0)
 
         with open(self.__v4_template_path, "r", encoding="utf-8") as fh:
             template = StringTemplate(fh.read())
@@ -132,19 +130,11 @@ class MonthlyRenderer(BaseRenderer):
             "title": escape(str(chronicle.get("title", "Monthly Chronicle"))),
             "overview": self.__html_text(chronicle.get("monthly_summary") or chronicle.get("overview", "")),
             "market_causality": self.__html_text(chronicle.get("market_causality", "")),
-            "phase_analysis": self.__render_v4_list(chronicle.get("phase_analysis", [])),
-            "asset_contribution": self.__render_v4_list(chronicle.get("asset_contribution", [])),
+            "portfolio_impact": self.__render_v4_list(self.__v4_impact_items(chronicle)),
             "safe_ratio_section": safe_ratio_html,
             "portfolio_audit": self.__html_text(chronicle.get("portfolio_audit") or chronicle.get("structural_change", "")),
-            "next_month_watch": self.__render_v4_list(chronicle.get("next_month_watch", [])),
-            "ledger_days": escape(str(meta.get("ledger_days", 0))),
-            "total_change": escape(f"{total_delta:+,.0f} JPY"),
-            "total_change_pct": escape(f"{total_delta_pct:+.2f}%"),
-            "dominant_regime": escape(str(meta.get("dominant_regime", ""))),
-            "primary_causality": escape(str(meta.get("primary_causality", ""))),
-            "risk_temperature": escape(str(meta.get("risk_temperature", ""))),
-            "data_quality": escape(str(meta.get("data_quality", ""))),
-            "trend_rows": self.__render_v4_trend_rows(meta.get("asset_class_trends", [])),
+            "next_month_watch": self.__render_v4_list(chronicle.get("next_month_watch", [])[:2]),
+            "trend_rows": self.__render_v4_trend_rows(self.__top_v4_trends(meta.get("asset_class_trends", []))),
             "app_context": escape(self.app_context),
             "c_ink": self.c_ink,
             "c_gold": self.c_gold,
@@ -195,6 +185,30 @@ class MonthlyRenderer(BaseRenderer):
           </table>
         </div>
         """
+
+    def __v4_impact_items(self, chronicle: Dict[str, Any]) -> list[Any]:
+        contributions = chronicle.get("asset_contribution", [])
+        phases = chronicle.get("phase_analysis", [])
+        if not isinstance(contributions, list):
+            contributions = []
+        if not isinstance(phases, list):
+            phases = []
+        return [*contributions, *phases][:3]
+
+    def __top_v4_trends(self, rows: Any) -> list[Dict[str, Any]]:
+        if not isinstance(rows, list):
+            return []
+
+        def absolute_change(row: Any) -> float:
+            if not isinstance(row, dict):
+                return 0.0
+            try:
+                return abs(float(row.get("change_jpy", 0) or 0))
+            except (TypeError, ValueError):
+                return 0.0
+
+        valid_rows = [row for row in rows if isinstance(row, dict)]
+        return sorted(valid_rows, key=absolute_change, reverse=True)[:3]
 
     def __html_text(self, value: Any) -> str:
         return escape(str(value)).replace("\n", "<br>")
