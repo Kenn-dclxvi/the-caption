@@ -1,3 +1,4 @@
+import math
 from datetime import datetime
 from typing import Final
 from src.lib.utils import SystemUtils
@@ -24,10 +25,6 @@ class GuardRail:
             self.__logger.info("[Guard] Force/Test flag detected. Proceeding.")
             return True
 
-        if scope == "context":
-            self.__logger.info("[Guard] Context-only scope detected. Proceeding.")
-            return True
-
         if SystemUtils.get_flag(lock_file) == target_date_str:
             self.__logger.info(f"[Guard] Report for {target_date_str} already sent. Stopping.")
             return False
@@ -45,6 +42,19 @@ class GuardRail:
         return True
 
     def should_dispatch_shadow_ledger(self, shadow_ledger: ShadowLedger, allow_missing: bool = True) -> bool:
+        if not shadow_ledger.assets:
+            self.__logger.warning("[Guard] V4 ShadowLedger has no assets. Dispatch blocked.")
+            return False
+        try:
+            total_value = float(shadow_ledger.total_value_jpy)
+        except (TypeError, ValueError):
+            self.__logger.warning("[Guard] V4 ShadowLedger total is invalid. Dispatch blocked.")
+            return False
+        if not math.isfinite(total_value) or total_value <= 0:
+            self.__logger.warning(
+                f"[Guard] V4 ShadowLedger total is not positive ({shadow_ledger.total_value_jpy}). Dispatch blocked."
+            )
+            return False
         missing = [asset.name for asset in shadow_ledger.assets if asset.pricing_status == "MISSING"]
         if not missing:
             self.__logger.info(f"[Guard] V4 ShadowLedger priced: {len(shadow_ledger.assets)} assets. Proceeding.")

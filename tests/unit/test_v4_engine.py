@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.domain.ledger_schema import ShadowAssetRecord, ShadowLedger
+from src.domain.universal_ingester import CanonicalLedgerInputError
 from src.lib.models import Ledger, LedgerMeta, LedgerSummary, Position
 
 
@@ -52,6 +53,35 @@ def _shadow_us_asset(pricing_status="STALE"):
                 diff_pct=0.1,
                 pricing_status=pricing_status,
             )
+        ],
+    )
+
+
+def _positive_shadow_with_missing_asset():
+    return ShadowLedger(
+        target_date="2026-04-25",
+        generated_at="2026-04-25T00:00:00",
+        ssot_a_path="data/collection/market_units.csv",
+        ssot_b_path="data/external_assets.json",
+        ssot_b_active_key="2026-04",
+        total_value_jpy=1000,
+        assets=[
+            ShadowAssetRecord(
+                source="MARKET_UNITS",
+                name="MissingFund",
+                asset_class="MUTUAL_FUNDS",
+                category="MUTUAL_FUNDS",
+                current_value_jpy=0,
+                pricing_status="MISSING",
+            ),
+            ShadowAssetRecord(
+                source="ABSOLUTE_AMOUNT",
+                name="Cash",
+                asset_class="CASH",
+                category="CASH",
+                current_value_jpy=1000,
+                pricing_status="STATIC",
+            ),
         ],
     )
 
@@ -138,7 +168,7 @@ def harness(tmp_path):
         market_snapshot_repo = MockMarketSnapshotRepo.return_value
 
         MockUtils.check_env_vars.return_value = True
-        MockUtils.set_flag = MagicMock()
+        MockUtils.set_flag = MagicMock(return_value=True)
         timeline.get_target_date.return_value = "2026-04-25"
         timeline.is_holiday.return_value = False
         timeline.get_us_market_context.return_value = {
@@ -201,13 +231,13 @@ def harness(tmp_path):
 def test_v4_engine_dispatches_from_universal_ingester(harness):
     engine, mocks = harness
 
-    engine.run(target_date="2026-04-25")
+    assert engine.run(target_date="2026-04-25") is True
 
     mocks["history_updater"].refresh.assert_called_once_with(
         target_date="2026-04-25",
         us_market_date="2026-04-24",
     )
-    mocks["ingester"].run.assert_called_once_with("2026-04-25", output_path=str(mocks["shadow_output"]))
+    mocks["ingester"].run.assert_called_once_with("2026-04-25")
     mocks["daily_metrics_repo"].save.assert_called_once()
     saved_metrics = mocks["daily_metrics_repo"].save.call_args[0][0]
     assert saved_metrics["schema_version"] == "v4.1-daily-metrics"
@@ -330,13 +360,13 @@ def test_v4_engine_uses_today_when_target_date_is_omitted(harness):
         target_date="2026-04-27",
         us_market_date="2026-04-24",
     )
-    mocks["ingester"].run.assert_called_once_with("2026-04-27", output_path=str(mocks["shadow_output"]))
+    mocks["ingester"].run.assert_called_once_with("2026-04-27")
     mocks["sender"].send.assert_called_once_with("CAPTION [2026-04-27]", "<html>v4</html>")
 
 
 def test_v4_engine_missing_prices_dispatch_as_provisional(harness):
     engine, mocks = harness
-    missing_shadow = _shadow("MISSING")
+    missing_shadow = _positive_shadow_with_missing_asset()
     mocks["ingester"].run.return_value = missing_shadow
 
     engine.run(target_date="2026-04-25")
@@ -344,7 +374,7 @@ def test_v4_engine_missing_prices_dispatch_as_provisional(harness):
     assert mocks["sender"].send.call_args[0][0] == "CAPTION [2026-04-25]○"
     assert mocks["ingester"].run.call_count == 2
     assert mocks["history_updater"].refresh.call_count == 2
-    assert mocks["history_updater"].refresh.call_args_list[1].kwargs["only_assets"] == {"FundA"}
+    assert mocks["history_updater"].refresh.call_args_list[1].kwargs["only_assets"] == {"MissingFund"}
     mocks["utils"].set_flag.assert_not_called()
     mocks["context_repo"].save.assert_not_called()
     mocks["knowledge"].record_insight.assert_not_called()
@@ -386,3 +416,59 @@ def test_v4_engine_uses_deterministic_context_always(harness):
     mocks["knowledge"].record_insight.assert_not_called()
     rendered_vm = mocks["renderer"].render.call_args[0][0]
     assert rendered_vm.theme_subtitle == "日次記録"
+
+
+def test_ingester_failure_prevents_dispatch_and_completion_lock(harness):
+    engine, mocks = harness
+    mocks["ingester"].run.side_effect = CanonicalLedgerInputError("required SSOT invalid")
+
+    assert engine.run(target_date="2026-04-25") is False
+
+    mocks["sender"].send.assert_not_called()
+    mocks["utils"].set_flag.assert_not_called()
+
+
+def test_finalized_ledger_persistence_failure_prevents_dispatch_and_lock(harness):
+    engine, mocks = harness
+    mocks["shadow_output"].write_text('{"previous":"valid"}\n', encoding="utf-8")
+
+    with patch("src.app.v4_engine.atomic_write_json", side_effect=OSError("disk full")):
+        result = engine.run(target_date="2026-04-25")
+
+    assert result is False
+    assert mocks["shadow_output"].read_text(encoding="utf-8") == '{"previous":"valid"}\n'
+    mocks["daily_metrics_repo"].save.assert_not_called()
+    mocks["sender"].send.assert_not_called()
+    mocks["utils"].set_flag.assert_not_called()
+
+
+def test_daily_metrics_persistence_failure_prevents_dispatch_and_lock(harness):
+    engine, mocks = harness
+    mocks["daily_metrics_repo"].save.return_value = False
+
+    assert engine.run(target_date="2026-04-25") is False
+
+    mocks["market_snapshot_repo"].save.assert_not_called()
+    mocks["sender"].send.assert_not_called()
+    mocks["utils"].set_flag.assert_not_called()
+
+
+def test_market_snapshot_persistence_failure_prevents_dispatch_and_lock(harness):
+    engine, mocks = harness
+    mocks["market_snapshot_repo"].save.return_value = False
+
+    assert engine.run(target_date="2026-04-25") is False
+
+    mocks["sender"].send.assert_not_called()
+    mocks["utils"].set_flag.assert_not_called()
+
+
+def test_completion_lock_failure_is_returned_as_incomplete_run(harness):
+    engine, mocks = harness
+    mocks["utils"].set_flag.return_value = False
+
+    assert engine.run(target_date="2026-04-25") is False
+
+    mocks["sender"].send.assert_called_once()
+    mocks["utils"].set_flag.assert_called_once()
+    mocks["notifier"].system_alert.assert_called_once()

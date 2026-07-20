@@ -145,10 +145,11 @@ python scripts/dev/run_shadow_ingester.py
 
 ### 1.2 Routine Schedule (運用スケジュール)
 
-Production の v4 標準運用では、`./run.sh v4` を平日 18:45 / 19:00 / 19:15 / 19:30 / 20:00 に繰り返し実行します。これらの再実行は、投資信託の当日評価額が確定する時間帯に合わせること、その他の EOD 市場データはすでに確定済みであること、米国市場データは日本時間の当日夜時点では前日分の確定データとして扱うことを前提にしています。
+Production の v4 標準運用では、`./run.sh v4` を平日 18:30 / 18:45 / 19:00 / 19:15 / 19:30 / 20:00 に繰り返し実行します。これらの再実行は、投資信託の当日評価額が確定する時間帯に合わせること、その他の EOD 市場データはすでに確定済みであること、米国市場データは日本時間の当日夜時点では直近 NYSE 実取引日の確定データとして扱うことを前提にしています。
 
 ```bash
-45 18 * * 1-5 cd <repo-root> && ./run.sh v4 > <repo-root>/logs/cron_panic_v4.log 2>&1
+30 18 * * 1-5 cd <repo-root> && ./run.sh v4 > <repo-root>/logs/cron_panic_v4.log 2>&1
+45 18 * * 1-5 cd <repo-root> && ./run.sh v4 >> <repo-root>/logs/cron_panic_v4.log 2>&1
 00 19 * * 1-5 cd <repo-root> && ./run.sh v4 >> <repo-root>/logs/cron_panic_v4.log 2>&1
 15 19 * * 1-5 cd <repo-root> && ./run.sh v4 >> <repo-root>/logs/cron_panic_v4.log 2>&1
 30 19 * * 1-5 cd <repo-root> && ./run.sh v4 >> <repo-root>/logs/cron_panic_v4.log 2>&1

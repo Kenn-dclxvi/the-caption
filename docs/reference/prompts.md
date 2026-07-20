@@ -58,6 +58,8 @@ v4日次では `ShadowLedgerAdapter` が `ShadowAssetRecord` を既存 `Position
 
 **設計意図**: 休場日にAIが存在しない市場データに基づく誤った因果推論を生成することを構造的に排除する。
 
+**現行実装との境界**: 上表は AI への文章生成制約である。台帳計算では米国株・コモディティだけでなく FX も直近 NYSE 実取引日 `trading_date` に固定し、`DAY` は純粋な FX 寄与を含めない。このため、NYSE 休場中に後続の FX 履歴が存在しても、休場日用プロンプトが示す「FX のみの変化」を台帳数値が表現するとは限らない。これは [ADR-0005](../adr/ADR-0005-target-date-us-market-date.md) で受容した既知の不整合であり、現時点ではプロンプト本文と計算式を変更しない。
+
 ### 2.4 ギャラリーアセンブリ
 
 `__generate_exhibition_report()` 内でポジションを集約し `gallery_text` を構築する。

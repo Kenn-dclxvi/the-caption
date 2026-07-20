@@ -47,6 +47,25 @@ V4 の日次コンテキストは常に確定論的に生成する。LLM 呼び�
 
 V4 Monolithic UI は v3 Fortress / Collection の主要メトリクスを復元する。防衛ブロックでは `Safe Ratio` の後に `Exposure / Iron Bank / Total Return` を置き、その下に `Total Net Assets` と `YTD / MTD / WTD` を1行、`DAY` を別行で表示する。Unified Ledger の各資産行は `YTD / MTD / WTD` を1行、`DAY` を別行で表示し、Exposure 側の補助指標は `UNITS / PRICE` のみを表示する。
 
+### V4 Total WTD/MTD/YTD Aggregation
+
+v4 の個別資産 `WTD` / `MTD` / `YTD` は、`UniversalIngester` が市場履歴の期間基準価格と現在価格から算出する。全体値は `ShadowLedgerAdapter._weighted_period_pct()` が、個別収益率を **期間開始時点相当額** で加重平均する。
+
+資産 `i` の現在評価額を `V_i`、個別期間収益率を小数表記で `r_i` とすると、期間開始時点相当額 `B_i` と全体収益率 `R` は次の式になる。
+
+```text
+B_i = V_i / (1 + r_i)
+R   = Σ(B_i × r_i) / ΣB_i
+```
+
+この変更の目的は、値上がり後に大きくなった現在評価額で同じ値上がり率を再び重く評価し、値下がり後に小さくなった現在評価額で同じ値下がり率を軽く評価する、現在評価額加重の上方偏りを除くことである。導入判断時のローカル保存データ（`target_date=2026-06-10`）では、メール表示上の YTD が旧式 `+19.58%`、本式 `+17.55%` となり、丸め前の式だけで `2.025` ポイントの差が生じた。一方、同じ比較日の WTD 差は `0.004` ポイント、MTD 差は `0.039` ポイントであり、主な改善対象は長期間に資産間の騰落差が広がる場合である。
+
+この全体値は、現在の保有数量を期間開始時にも保有していたとみなす **概算の市場収益率** であり、厳密な時間加重収益率（TWRR）ではない。期間中の入出金、売買時点、過去の保有数量は復元しない。`Portfolio Basis` は累積取得原価と `Total Return` の正典として維持し、本計算には使用しない。`ABSOLUTE_AMOUNT` と現金カテゴリは集計対象外とする。個別期間収益率が `---` の市場資産は、従来どおり分子への寄与を0とし、現在評価額を分母へ残す。
+
+本式は変更後に新しく生成するレポートへ前方適用する。送信済みメール、過去の台帳、`daily_metrics_YYYYMMDD.json` は再生成しない。過去の保有数量スナップショットが全日分揃っていないため、一括再生成は正確性を高めず、現在の保有数量を過去へ誤適用する可能性がある。
+
+この集計式の変更は、米国株の `trading_date` / `source_date`、市場終了判定、FX 基準日を変更しない。米国市場日付は独立した仕様・実装対象として扱う。
+
 `Portfolio Audit` は日次フローから廃止した。`generate_v4_insight()` の日次表示契約では `portfolio_audit` を表示対象に含めず、方針監査は月次フローで扱う。
 
 `DAILY PORTFOLIO APPRAISAL` は常時表示ではない。`total_return_jpy < 0` を満たし、かつ前回表示日から 7 日以上経過した場合のみ表示する。表示判定は `V4PortfolioEngine.__should_show_appraisal()` が行い、状態は `data/runtime/v4_appraisal_state.json` の `last_displayed_date` に記録する。これは表示制御であり、日次AI実行条件とは分離する。
@@ -210,7 +229,9 @@ Freshness Guard・Broker CSVダウンロード・CompletionLock（Broker）と�
 - `MarketCurator.__compute_actual_evidence()` はこのミュート済みの `prev_day_diff_pct` を参照して `actual_tech_pct` / `actual_metal_pct` を計算する。
 - 結果として LLM プロンプトへの `sys_tech_pct` / `sys_metal_pct` 注入値が資金移動ノイズを含まないシステム計算値となる。
 
-## 5. WTD/MTD/YTD — 時間加重収益率（TWRR）計算
+## 5. Legacy WTD/MTD/YTD — 時間加重収益率（TWRR）計算
+
+この節は legacy `LedgerManager` 経路だけを定義する。v4 `ShadowLedgerAdapter` の全体集計は「V4 Total WTD/MTD/YTD Aggregation」を正とする。
 
 `LedgerManager` は期間パフォーマンス指標（WTD/MTD/YTD）の算出に **時間加重収益率（Time-Weighted Rate of Return: TWRR）** を採用する。資金移動（入出金）による評価額の跳ねを排除し、純粋な市場変動の幾何連結を保証する。
 
@@ -350,20 +371,21 @@ def get_us_market_context(self, jp_target_date: str) -> Dict[str, object]:
 
 | 概念 | 定義 | 実装参照 |
 | :--- | :--- | :--- |
-| `target_date`（JP台帳対象日） | v4日次台帳に記録する日本時間基準の対象日。標準運用では 18:45 JST 以降に「当日」を対象にする。手動指定時は指定日をそのまま対象にする。旧 Broker 主系など legacy 経路の省略時前営業日解決とは分離する。 | `V4Engine.run()` / `UniversalIngester.build_shadow_ledger()` |
-| `us_market_date`（US市場取引日） | `target_date` の 18:45 JST 時点で採用可能な直近の NYSE 実取引日。通常は `target_date` の暦上の前日で、米国祝日・週末は前取引日にロールバックされる。 | `get_us_market_context()` の `trading_date` キー |
+| `target_date`（JP台帳対象日） | v4日次台帳に記録する日本時間基準の対象日。標準運用では 18:30 JST 以降に「当日」を対象にする。手動指定時は指定日をそのまま対象にする。旧 Broker 主系など legacy 経路の省略時前営業日解決とは分離する。 | `V4Engine.run()` / `UniversalIngester.build_shadow_ledger()` |
+| `us_market_date`（US市場取引日） | `target_date - 1日` 以前で直近の NYSE 実取引日。通常は `target_date` の暦上の前日で、米国祝日・週末は前取引日にロールバックされる。標準実行帯の時刻によって再判定しない。 | `get_us_market_context()` の `trading_date` キー |
 | `calendar_date`（US暦日） | `target_date` の暦上の前日（US側）。`trading_date` との差異が NYSE 休場の有無を示す。 | `get_us_market_context()` の `calendar_date` キー |
+| 取引日と確定判定 | `trading_date` は対象セッションの日付、`source_date` は採用した原資産価格行の日付である。データの取得日時・更新日時とは分離する。必要な価格行と FX 行の期待日到達、および終値確認の結果は `pricing_status` で表す。 | `UniversalIngester._build_market_record()` |
 | 米国休場日の扱い | 株価データは前取引日の値を引き継ぐ。AI プロンプトには `is_holiday=True` として注入され、存在しない市場変動へのハルシネーションを構造的に防止する。 | `get_us_market_context()` → `is_holiday` キー |
-| 境界時刻（JST） | システム実行推奨時刻は **18:45 JST**。この時刻を基準に「確定済みデータ」を定義する（下表参照）。 | `../how-to/index.md §1.2 Routine Schedule` |
-| `manual_date` 指定時の注意 | 日本祝日を含む任意の日付を指定可能。ただし Freshness Guard が `STAGNANT` を返す確率が高く、データ確定を保証しない。 | `TimelineController` — `get_target_date()` `manual_date` パス |
+| 境界時刻（JST） | 標準実行帯は **18:30〜20:00 JST**。最初の実行は 18:30、その後は 18:45 / 19:00 / 19:15 / 19:30 / 20:00 に再実行する。 | `../how-to/index.md §1.2 Routine Schedule` |
+| `manual_date` 指定時の注意 | 日本祝日を含む任意の日付を指定可能。v4 は legacy Freshness Guard の `STAGNANT` を使用しない。選択更新後も必要な価格または FX が期待日へ届かなければ `MISSING` / `STALE` の暫定配信とし、CompletionLock を記録しない。 | `V4Engine.run()` / `UniversalIngester.build_shadow_ledger()` |
 | **WTD 週起点（JP基準）** | WTD の分母（起点）は `target_date`（JP処理日）の ISO week の月曜から3日前（JP前週金曜）を排他上限として選出した最後の履歴値。米国株・コモディティは米国金曜終値が JP 月曜朝に届くため、その値は起点ではなく当週の第1観測値（分子側）として扱う。`UniversalIngester._period_base_value` に `week_origin=target_date` を渡すことで日本時間基準を強制している。 | `UniversalIngester._period_base_value`（`week_origin` 引数）/ §5 WTD 注記 |
 
 ### アセットクラス別 価格基準日定義
 
-システム実行タイミング（18:45 JST）における各アセットクラスの「確定済み最新値」を定義する。  
+システム標準実行帯（18:30〜20:00 JST）における各アセットクラスの「確定済み最新値」を定義する。
 `target_date` を JP 処理日、`trading_date` を対応する直近 NYSE 実取引日とする。
 
-| アセットクラス | 市場時間（JST） | 18:45 JST 時点の確定状況 | 使用する yfinance Date | `yf.download` の `end`（exclusive） |
+| アセットクラス | 市場時間（JST） | 標準実行帯での確定状況 | 使用する yfinance Date | `yf.download` の `end`（exclusive） |
 | :--- | :--- | :--- | :--- | :--- |
 | **JP株**（`JP_STOCK`） | 9:00〜15:30 | ✅ `target_date` 当日引け確定 | `target_date` | `target_date + 1日` |
 | **US株**（`US_STOCK`） | 翌23:30〜6:00 | ✅ `trading_date` 引け確定（当日セッション未開始） | `trading_date`（yfinance の expected date Close 欠落時のみ Alpha Vantage fallback で同日 Close を補完） | `trading_date + 1日` |
@@ -371,7 +393,9 @@ def get_us_market_context(self, jp_target_date: str) -> Dict[str, object]:
 | **FX**（`USDJPY` 等） | 24時間（yfinance は 17:00 ET 基準） | ✅ `trading_date` の 17:00 ET 値確定（= 当日 06:00 JST） | `trading_date` | `trading_date + 1日` |
 | **投資信託**（`MUTUAL_FUNDS`） | URL 取得（ファンド側管理） | `target_date` の基準価額があれば当日値。未公表なら `target_date` 以前の最新値を `STALE` として採用 | 適用外 | 適用外 |
 
-`UniversalIngester` は台帳再計算時もこの採用上限を守る。ローカル履歴 CSV に `target_date` 当日の US株・コモディティ・FX 行が後から存在していても、`target_date` の 18:45 JST 時点で採用不能な行であれば `trading_date` 上限により除外する。
+`UniversalIngester` は台帳再計算時もこの採用上限を守る。ローカル履歴 CSV に `trading_date` より後の US株・コモディティ・FX 行が後から存在していても、その `target_date` の計算では `trading_date` 上限により除外する。
+
+現行の `DAY` は、採用した直近米国セッションの原資産騰落率である。同じ `trading_date` を参照する複数の `target_date` では同じ値を繰り返し得る。FX も `trading_date` に固定し、純粋な FX 変動だけによる評価額差は `DAY` に含めない。米国株価日と FX 日を分離する代替案、確定ブロック境界、観測事例は [ADR-0005](../adr/ADR-0005-target-date-us-market-date.md) を正とする。
 
 `CollectionHistoryUpdater` は yfinance を primary とする。US株（`US_STOCK`）で `trading_date` を expected date として取得した後、valid `Close` 履歴の最新日が `trading_date` より前、または `trading_date` 行に valid `Close` がない場合のみ、`ALPHA_VANTAGE_API_KEY` が設定されていれば Alpha Vantage `TIME_SERIES_DAILY` の `4. close` を optional fallback として同日行へ merge する。API key 未設定/空、Alpha Vantage の HTTP/JSON/API/parse error、または `US_STOCK` 以外では fallback しない。fallback 不成立時は補完せず、後段の鮮度判定で `STALE` になり得る。
 

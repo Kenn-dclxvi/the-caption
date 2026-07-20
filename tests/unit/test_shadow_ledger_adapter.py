@@ -94,3 +94,92 @@ def test_shadow_ledger_adapter_marks_missing_price_as_stagnant():
     ledger = ShadowLedgerAdapter().to_legacy_ledger(shadow)
 
     assert ledger.meta.integrity_status == "STAGNANT"
+
+
+def test_total_period_returns_use_period_start_equivalent_weights():
+    shadow = ShadowLedger(
+        target_date="2026-06-10",
+        generated_at="2026-06-10T00:00:00",
+        ssot_a_path="data/collection/market_units.csv",
+        ssot_b_path="data/external_assets.json",
+        ssot_b_active_key="2026-06",
+        total_value_jpy=800,
+        assets=[
+            ShadowAssetRecord(
+                source="MARKET_UNITS",
+                name="Winner",
+                asset_class="MUTUAL_FUNDS",
+                category="MUTUAL_FUNDS",
+                currency="JPY",
+                current_value_jpy=200,
+                wtd_pct=100.0,
+                mtd_pct=100.0,
+                ytd_pct=100.0,
+                pricing_status="PRICED",
+            ),
+            ShadowAssetRecord(
+                source="MARKET_UNITS",
+                name="Flat",
+                asset_class="JP_STOCK",
+                category="JP_STOCK",
+                currency="JPY",
+                current_value_jpy=100,
+                wtd_pct=0.0,
+                mtd_pct=0.0,
+                ytd_pct=0.0,
+                pricing_status="PRICED",
+            ),
+            ShadowAssetRecord(
+                source="ABSOLUTE_AMOUNT",
+                name="Cash",
+                asset_class="CASH_EXTERNAL",
+                category="CASH_EXTERNAL",
+                currency="JPY",
+                current_value_jpy=500,
+                pricing_status="STATIC",
+            ),
+        ],
+    )
+
+    ledger = ShadowLedgerAdapter().to_legacy_ledger(shadow)
+
+    assert ledger.summary.total_wtd == "+50.00%"
+    assert ledger.summary.total_mtd == "+50.00%"
+    assert ledger.summary.total_ytd == "+50.00%"
+
+
+def test_total_period_returns_do_not_underweight_a_loser_after_the_loss():
+    shadow = ShadowLedger(
+        target_date="2026-06-10",
+        generated_at="2026-06-10T00:00:00",
+        ssot_a_path="data/collection/market_units.csv",
+        ssot_b_path="data/external_assets.json",
+        ssot_b_active_key="2026-06",
+        total_value_jpy=150,
+        assets=[
+            ShadowAssetRecord(
+                source="MARKET_UNITS",
+                name="Loser",
+                asset_class="MUTUAL_FUNDS",
+                category="MUTUAL_FUNDS",
+                currency="JPY",
+                current_value_jpy=50,
+                ytd_pct=-50.0,
+                pricing_status="PRICED",
+            ),
+            ShadowAssetRecord(
+                source="MARKET_UNITS",
+                name="Flat",
+                asset_class="JP_STOCK",
+                category="JP_STOCK",
+                currency="JPY",
+                current_value_jpy=100,
+                ytd_pct=0.0,
+                pricing_status="PRICED",
+            ),
+        ],
+    )
+
+    ledger = ShadowLedgerAdapter().to_legacy_ledger(shadow)
+
+    assert ledger.summary.total_ytd == "-25.00%"

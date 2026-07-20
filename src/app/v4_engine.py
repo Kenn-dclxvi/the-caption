@@ -21,6 +21,7 @@ from src.infra.mail_sender import MailSender
 from src.infra.market_data import MarketDataFetcher
 from src.infra.market_snapshot_repository import MarketSnapshotRepository
 from src.lib.logger import setup_logger
+from src.lib.atomic_write import atomic_write_json
 from src.lib.timeline_controller import TimelineController
 from src.lib.utils import SystemUtils
 
@@ -56,7 +57,7 @@ class V4PortfolioEngine:
         self.__sender = MailSender()
         self.__market_fetcher = MarketDataFetcher()
 
-    def run(self, **kwargs: Any) -> None:
+    def run(self, **kwargs: Any) -> bool:
         try:
             logger.info("[Guard] V4 Pre-flight Check: Verifying environment and resources")
             _smtp = _mask_smtp_to(SMTP_TO)
@@ -66,7 +67,7 @@ class V4PortfolioEngine:
 
             if kwargs.get("test_error"):
                 self.__notifier.system_alert("Test alert triggered.", "SYSTEM_CRASH_V4", is_test=True)
-                return
+                return False
 
             manual_date = kwargs.get("target_date")
             scope = kwargs.get("scope", "all")
@@ -87,7 +88,7 @@ class V4PortfolioEngine:
                 format_test=format_test,
             ):
                 logger.info("[Outcome] V4 execution inhibited by GuardRail")
-                return
+                return False
 
             us_context = self.__timeline.get_us_market_context(target_date_str)
             trading_date = us_context.get("trading_date") or target_date_str
@@ -95,23 +96,27 @@ class V4PortfolioEngine:
                 target_date=target_date_str,
                 us_market_date=trading_date,
             )
-            shadow_ledger = self.__ingester.run(target_date_str, output_path=self.__SHADOW_OUTPUT)
+            shadow_ledger = self.__ingester.run(target_date_str)
             finalized_ledger = self.__finalizer.finalize(shadow_ledger)
             finalized_ledger = self.__retry_incomplete_market_pricing(
                 target_date=target_date_str,
                 us_market_date=trading_date,
                 current_ledger=finalized_ledger,
             )
-            self.__persist_finalized_shadow_ledger(finalized_ledger)
             if not self.__guard.should_dispatch_shadow_ledger(finalized_ledger, allow_missing=True):
                 logger.info("[Outcome] V4 execution inhibited by ShadowLedger GuardRail")
-                return
+                return False
+            if not self.__persist_finalized_shadow_ledger(finalized_ledger):
+                logger.error("[Outcome] V4 finalized ShadowLedger persistence failed. Dispatch blocked.")
+                return False
             daily_metrics = build_daily_metrics(finalized_ledger)
             if not self.__daily_metrics_repo.save(daily_metrics, target_date_str):
-                logger.warning(f"[AUDIT] V4 daily metrics save failed: {target_date_str}")
+                logger.error(f"[Outcome] V4 daily metrics persistence failed: {target_date_str}. Dispatch blocked.")
+                return False
             market_context = self.__build_v4_market_context(target_date_str)
             if not self.__market_snapshot_repo.save(market_context, target_date_str):
-                logger.warning(f"[AUDIT] V4 market snapshot save failed: {target_date_str}")
+                logger.error(f"[Outcome] V4 market snapshot persistence failed: {target_date_str}. Dispatch blocked.")
+                return False
 
             canonical_ledger = self.__adapter.to_legacy_ledger(finalized_ledger)
             is_provisional = any(asset.pricing_status in ("MISSING", "STALE") for asset in finalized_ledger.assets)
@@ -140,16 +145,26 @@ class V4PortfolioEngine:
             dispatched = self.__dispatch_monolithic_report(subject, html, format_test)
 
             if dispatched and not format_test and not is_provisional:
-                self.__record_successful_dispatch(target_date_str, show_appraisal)
+                if not self.__record_successful_dispatch(target_date_str, show_appraisal):
+                    message = (
+                        f"CompletionLock update failed after mail dispatch for {target_date_str}; "
+                        "the run is incomplete and a retry may redeliver the message."
+                    )
+                    logger.error(f"[Outcome] V4 {message}")
+                    self.__notifier.system_alert(message, "COMPLETION_LOCK_WRITE_FAILED_V4")
+                    return False
 
             final_status = "DISPATCHED" if dispatched else "SKIPPED"
             logger.info(f"[Outcome] V4 pipeline cycle finished: {final_status}")
+            return dispatched
         except RuntimeError as re_err:
             logger.warning(f"[Guard] V4 operational limit: {re_err}")
             self.__notifier.system_alert(str(re_err), "OPERATIONAL_LIMIT_V4")
+            return False
         except Exception as exc:
             logger.error(f"[Outcome] V4 FATAL CRASH: {exc}", exc_info=True)
             self.__notifier.system_alert(str(exc), "SYSTEM_CRASH_V4")
+            return False
 
     def __retry_incomplete_market_pricing(
         self,
@@ -180,16 +195,16 @@ class V4PortfolioEngine:
             us_market_date=us_market_date,
             only_assets=target_names,
         )
-        retried_ledger = self.__ingester.run(target_date, output_path=self.__SHADOW_OUTPUT)
+        retried_ledger = self.__ingester.run(target_date)
         return self.__finalizer.finalize(retried_ledger)
 
-    def __persist_finalized_shadow_ledger(self, shadow_ledger: Any) -> None:
+    def __persist_finalized_shadow_ledger(self, shadow_ledger: Any) -> bool:
         try:
-            with open(self.__SHADOW_OUTPUT, "w", encoding="utf-8") as fh:
-                json.dump(shadow_ledger.model_dump(), fh, ensure_ascii=False, indent=2)
-                fh.write("\n")
+            atomic_write_json(self.__SHADOW_OUTPUT, shadow_ledger.model_dump())
+            return True
         except Exception as exc:
             logger.warning(f"[AUDIT] Failed to persist finalized ShadowLedger: {exc}")
+            return False
 
     def __resolve_context_data(
         self,
@@ -256,10 +271,10 @@ class V4PortfolioEngine:
             return True
         return self.__sender.send(subject, html)
 
-    def __record_successful_dispatch(self, target_date: str, show_appraisal: bool) -> None:
+    def __record_successful_dispatch(self, target_date: str, show_appraisal: bool) -> bool:
         if show_appraisal:
             self.__record_appraisal_display(target_date)
-        SystemUtils.set_flag(LAST_SENT_FILE_CURRENT, target_date)
+        return SystemUtils.set_flag(LAST_SENT_FILE_CURRENT, target_date)
 
     def __load_or_generate_context(
         self,

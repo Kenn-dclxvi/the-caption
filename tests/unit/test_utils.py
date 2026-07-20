@@ -1,26 +1,51 @@
+import json
 import os
 from unittest.mock import patch
+
+from src.lib.atomic_write import DEFAULT_NEW_FILE_MODE, atomic_write_json
 from src.lib.utils import SystemUtils
 
 
 class TestSetFlagAtomic:
     def test_roundtrip(self, tmp_path):
         path = str(tmp_path / "flag.txt")
-        SystemUtils.set_flag(path, "2026-02-28")
+        assert SystemUtils.set_flag(path, "2026-02-28") is True
         assert SystemUtils.get_flag(path) == "2026-02-28"
 
     def test_no_stray_temp_on_success(self, tmp_path):
         path = str(tmp_path / "flag.txt")
-        SystemUtils.set_flag(path, "ok")
+        assert SystemUtils.set_flag(path, "ok") is True
         names = {f.name for f in tmp_path.iterdir()}
         assert names == {"flag.txt"}
 
-    def test_no_stray_temp_on_replace_failure(self, tmp_path):
+    def test_replace_failure_is_reported_and_preserves_previous_flag(self, tmp_path):
         path = str(tmp_path / "flag.txt")
+        (tmp_path / "flag.txt").write_text("previous", encoding="utf-8")
         with patch("src.lib.utils.os.replace", side_effect=OSError("disk full")):
-            SystemUtils.set_flag(path, "fail")
-        remaining = list(tmp_path.iterdir())
-        assert remaining == []
+            result = SystemUtils.set_flag(path, "fail")
+        assert result is False
+        assert SystemUtils.get_flag(path) == "previous"
+        assert {item.name for item in tmp_path.iterdir()} == {"flag.txt"}
+
+
+class TestAtomicWriteJsonPermissions:
+    def test_preserves_existing_destination_mode(self, tmp_path):
+        path = tmp_path / "ledger.json"
+        path.write_text('{"old":true}\n', encoding="utf-8")
+        path.chmod(0o640)
+
+        atomic_write_json(str(path), {"new": True})
+
+        assert path.stat().st_mode & 0o777 == 0o640
+        assert json.loads(path.read_text(encoding="utf-8")) == {"new": True}
+
+    def test_new_destination_uses_documented_deterministic_mode(self, tmp_path):
+        path = tmp_path / "ledger.json"
+
+        atomic_write_json(str(path), {"new": True})
+
+        assert DEFAULT_NEW_FILE_MODE == 0o644
+        assert path.stat().st_mode & 0o777 == DEFAULT_NEW_FILE_MODE
 
 
 class TestParsePctStr:

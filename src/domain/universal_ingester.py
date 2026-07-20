@@ -1,5 +1,8 @@
+import csv
 import json
+import math
 import os
+import re
 from datetime import datetime
 from typing import Any, Callable, Dict, Final, List, Literal, Optional, Tuple
 
@@ -17,6 +20,7 @@ from src.domain.market_units_snapshot import (
     snapshot_path,
 )
 from src.lib.logger import setup_logger
+from src.lib.atomic_write import atomic_write_json
 from src.lib.timeline_controller import TimelineController
 
 logger = setup_logger(__name__)
@@ -26,6 +30,16 @@ _US_STOCK_ASSET_CLASS: Final[str] = "US_STOCK"
 _COMMODITY_ASSET_CLASS: Final[str] = "COMMODITIES"
 _COMMODITY_OZ_TO_G: Final[float] = 31.1034768
 _US_MARKET_DATE_CLASSES: Final[set[str]] = {"US_STOCK", "COMMODITIES", "FX"}
+_REQUIRED_SSOT_A_COLUMNS: Final[set[str]] = {
+    "name",
+    "units",
+    "csv_url",
+}
+_EXTERNAL_MONTH_KEY_RE: Final[re.Pattern[str]] = re.compile(r"^\d{4}-(?:0[1-9]|1[0-2])$")
+
+
+class CanonicalLedgerInputError(ValueError):
+    """A required Canonical Ledger input is missing, unreadable, or invalid."""
 
 
 class UniversalIngester:
@@ -58,7 +72,13 @@ class UniversalIngester:
         allow_live_csv_in_strict: bool = False,
     ) -> ShadowLedger:
         active_date = target_date or datetime.now().strftime("%Y-%m-%d")
-        units_resolution = self._resolve_market_units(active_date, units_mode, allow_live_csv_in_strict)
+        canonical_market_assets = self._load_fund_config()
+        units_resolution = self._resolve_market_units(
+            active_date,
+            units_mode,
+            allow_live_csv_in_strict,
+            live_market_assets=canonical_market_assets,
+        )
         market_assets = units_resolution["items"]
         external_items, active_key = self._load_external_assets(active_date)
         basis_key, total_acquisition_cost = self._load_portfolio_basis(active_date)
@@ -115,10 +135,7 @@ class UniversalIngester:
     ) -> ShadowLedger:
         ledger = self.build_shadow_ledger(target_date)
         if output_path:
-            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(ledger.model_dump(), f, ensure_ascii=False, indent=2)
-                f.write("\n")
+            atomic_write_json(output_path, ledger.model_dump())
         return ledger
 
     def _resolve_market_units(
@@ -126,6 +143,7 @@ class UniversalIngester:
         target_date: str,
         units_mode: Literal["daily", "strict"],
         allow_live_csv_in_strict: bool,
+        live_market_assets: Optional[List[Dict[str, Any]]] = None,
     ) -> UnitsResolution:
         if units_mode not in {"daily", "strict"}:
             raise ValueError(f"units_mode must be 'daily' or 'strict', got: {units_mode}")
@@ -133,29 +151,34 @@ class UniversalIngester:
         snapshot = snapshot_path(target_date, self.units_snapshot_dir)
         if os.path.exists(snapshot):
             try:
+                snapshot_items = load_units_snapshot(snapshot, target_date, self.ssot_a_path)
+                self._validate_market_items(snapshot_items, snapshot)
                 return {
-                    "items": load_units_snapshot(snapshot, target_date, self.ssot_a_path),
+                    "items": snapshot_items,
                     "source": {
                         "type": "SNAPSHOT",
                         "path": snapshot,
                         "snapshot_target_date": target_date,
                     },
                 }
-            except MarketUnitsSnapshotError as exc:
+            except (MarketUnitsSnapshotError, CanonicalLedgerInputError) as exc:
                 if units_mode == "strict":
                     raise
                 logger.warning(f"[Guard] Invalid market units snapshot; falling back to live CSV: {snapshot} ({exc})")
-                return self._load_live_market_units()
+                return self._load_live_market_units(live_market_assets)
 
         if units_mode == "strict" and not allow_live_csv_in_strict:
             raise MarketUnitsSnapshotError(f"market units snapshot missing: {snapshot}")
 
         logger.warning(f"[Guard] Market units snapshot missing; falling back to live CSV: {snapshot}")
-        return self._load_live_market_units()
+        return self._load_live_market_units(live_market_assets)
 
-    def _load_live_market_units(self) -> UnitsResolution:
+    def _load_live_market_units(
+        self,
+        live_market_assets: Optional[List[Dict[str, Any]]] = None,
+    ) -> UnitsResolution:
         return {
-            "items": self._load_fund_config(),
+            "items": live_market_assets if live_market_assets is not None else self._load_fund_config(),
             "source": {
                 "type": "LIVE_CSV",
                 "path": self.ssot_a_path,
@@ -164,36 +187,83 @@ class UniversalIngester:
 
     def _load_fund_config(self) -> List[Dict[str, Any]]:
         try:
+            with open(self.ssot_a_path, newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                columns = set(reader.fieldnames or [])
+            missing_columns = sorted(_REQUIRED_SSOT_A_COLUMNS - columns)
+            if missing_columns:
+                raise CanonicalLedgerInputError(
+                    f"SSOT A missing required columns {missing_columns}: {self.ssot_a_path}"
+                )
             funds = load_market_units_csv(self.ssot_a_path)
-            for row in funds:
-                row["units"] = float(row["units"])
+            self._validate_market_items(funds, self.ssot_a_path)
             return funds
-        except FileNotFoundError:
-            logger.warning(f"[Guard] v4 market units config missing: {self.ssot_a_path}")
+        except CanonicalLedgerInputError:
+            raise
+        except FileNotFoundError as exc:
+            raise CanonicalLedgerInputError(f"SSOT A missing: {self.ssot_a_path}") from exc
         except Exception as exc:
-            logger.error(f"[Guard] Failed to read v4 market units config: {exc}")
-        return []
+            raise CanonicalLedgerInputError(
+                f"SSOT A unreadable or structurally invalid: {self.ssot_a_path} ({exc})"
+            ) from exc
+
+    def _validate_market_items(self, items: List[Dict[str, Any]], source: str) -> None:
+        for index, row in enumerate(items):
+            name = str(row.get("name") or "").strip()
+            asset_class = str(row.get("asset_class") or "").strip()
+            currency = str(row.get("currency") or "").strip()
+            source_symbol = str(row.get("source_symbol") or "").strip()
+            if not all((name, asset_class, currency, source_symbol)):
+                raise CanonicalLedgerInputError(
+                    f"SSOT A item[{index}] missing required identity fields: {source}"
+                )
+            try:
+                units = float(row.get("units"))
+            except (TypeError, ValueError) as exc:
+                raise CanonicalLedgerInputError(
+                    f"SSOT A item[{index}] units must be numeric: {source}"
+                ) from exc
+            if not math.isfinite(units) or units < 0:
+                raise CanonicalLedgerInputError(
+                    f"SSOT A item[{index}] units must be finite and non-negative: {source}"
+                )
+            row["units"] = units
 
     def _load_external_assets(self, target_date: str) -> Tuple[List[Dict[str, Any]], str]:
-        if not os.path.exists(self.external_assets_path):
-            return [], "missing"
-
         try:
             with open(self.external_assets_path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
+        except FileNotFoundError as exc:
+            raise CanonicalLedgerInputError(f"SSOT B missing: {self.external_assets_path}") from exc
         except Exception as exc:
-            logger.error(f"[Guard] Failed to read v4 external assets: {exc}")
-            return [], "invalid"
+            raise CanonicalLedgerInputError(
+                f"SSOT B unreadable: {self.external_assets_path} ({exc})"
+            ) from exc
 
         if not isinstance(payload, dict):
-            return [], "invalid"
+            raise CanonicalLedgerInputError(f"SSOT B root must be an object: {self.external_assets_path}")
+
+        if "items" in payload:
+            if set(payload) != {"items"}:
+                raise CanonicalLedgerInputError(
+                    f"SSOT B legacy payload cannot mix items with monthly keys: {self.external_assets_path}"
+                )
+            return self._normalize_external_items(payload, "legacy/none"), "legacy/none"
+
+        normalized_by_key: Dict[str, List[Dict[str, Any]]] = {}
+        for key, entry in payload.items():
+            if key != "default" and not _EXTERNAL_MONTH_KEY_RE.fullmatch(key):
+                raise CanonicalLedgerInputError(
+                    f"SSOT B invalid top-level key {key!r}: {self.external_assets_path}"
+                )
+            normalized_by_key[key] = self._normalize_external_items(entry, key)
 
         month_key = target_date[:7]
-        if month_key in payload:
-            return self._normalize_external_items(payload[month_key]), month_key
-        if "default" in payload:
-            return self._normalize_external_items(payload["default"]), "default"
-        return self._normalize_external_items(payload), "legacy/none"
+        if month_key in normalized_by_key:
+            return normalized_by_key[month_key], month_key
+        if "default" in normalized_by_key:
+            return normalized_by_key["default"], "default"
+        return [], "legacy/none"
 
     def _load_portfolio_basis(self, target_date: str) -> Tuple[Optional[str], Optional[float]]:
         if not os.path.exists(self.portfolio_basis_path):
@@ -225,23 +295,46 @@ class UniversalIngester:
             return None
         return amount if amount > 0 else None
 
-    def _normalize_external_items(self, entry: Any) -> List[Dict[str, Any]]:
-        if isinstance(entry, dict) and isinstance(entry.get("items"), list):
-            source_items = entry["items"]
-        else:
-            source_items = []
+    def _normalize_external_items(self, entry: Any, source_key: str) -> List[Dict[str, Any]]:
+        if not isinstance(entry, dict) or not isinstance(entry.get("items"), list):
+            raise CanonicalLedgerInputError(
+                f"SSOT B {source_key!r} entry must contain an items array: {self.external_assets_path}"
+            )
+        source_items = entry["items"]
 
         items: List[Dict[str, Any]] = []
-        for raw in source_items:
-            item = raw if isinstance(raw, dict) else {}
+        for index, raw in enumerate(source_items):
+            if not isinstance(raw, dict):
+                raise CanonicalLedgerInputError(
+                    f"SSOT B {source_key!r} item[{index}] must be an object: {self.external_assets_path}"
+                )
+            category = raw.get("category")
+            name = raw.get("name", "")
+            if not isinstance(category, str) or not category.strip():
+                raise CanonicalLedgerInputError(
+                    f"SSOT B {source_key!r} item[{index}] category must be a non-empty string"
+                )
+            if not isinstance(name, str):
+                raise CanonicalLedgerInputError(
+                    f"SSOT B {source_key!r} item[{index}] name must be a string"
+                )
             try:
-                amount = float(item.get("amount", 0) or 0)
-            except (TypeError, ValueError):
-                amount = 0.0
+                raw_amount = raw.get("amount")
+                if isinstance(raw_amount, bool):
+                    raise ValueError("boolean amount")
+                amount = float(raw_amount)
+            except (TypeError, ValueError) as exc:
+                raise CanonicalLedgerInputError(
+                    f"SSOT B {source_key!r} item[{index}] amount must be numeric"
+                ) from exc
+            if not math.isfinite(amount) or amount < 0:
+                raise CanonicalLedgerInputError(
+                    f"SSOT B {source_key!r} item[{index}] amount must be finite and non-negative"
+                )
             items.append({
-                "category": str(item.get("category", "") or "").strip(),
-                "name": str(item.get("name", "") or "").strip(),
-                "amount": amount if amount > 0 else 0.0,
+                "category": category.strip(),
+                "name": name.strip(),
+                "amount": amount,
             })
         return items
 

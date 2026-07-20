@@ -105,19 +105,28 @@ class ShadowLedgerAdapter:
 
     def _weighted_period_pct(self, assets: List[Position], attr: str) -> str:
         market_assets = [asset for asset in assets if asset.category != "CASH" and asset.value_jpy > 0]
-        total_value = sum(asset.value_jpy for asset in market_assets)
-        if total_value <= 0:
+        if not market_assets:
             return "---"
 
         weighted = 0.0
+        period_base_total = 0.0
         has_value = False
         for asset in market_assets:
             raw = getattr(asset, attr, "---")
             if raw == "---":
+                # Preserve the existing conservative missing-data treatment:
+                # keep the asset in the denominator with zero contribution.
+                period_base_total += asset.value_jpy
                 continue
-            weighted += float(str(raw).replace("%", "")) * asset.value_jpy
+            period_pct = float(str(raw).replace("%", ""))
+            growth_factor = 1.0 + period_pct / 100.0
+            if growth_factor <= 0:
+                return "---"
+            period_base_value = asset.value_jpy / growth_factor
+            period_base_total += period_base_value
+            weighted += period_pct * period_base_value
             has_value = True
-        return f"{weighted / total_value:+.2f}%" if has_value else "---"
+        return f"{weighted / period_base_total:+.2f}%" if has_value and period_base_total > 0 else "---"
 
     def _fmt_pct(self, value: float | None) -> str:
         return f"{value:+.2f}%" if value is not None else "---"

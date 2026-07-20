@@ -310,7 +310,23 @@ SSOT A の正本は `data/collection/market_units.csv` であり、runtime は�
 | `STALE` | 価格は取得できたが、資産クラスごとの基準日（JP株/投信=`target_date`、US株/コモディティ/FX=`trading_date`）に未到達の資産。USD建て資産・コモディティは、為替（FX）の基準日未到達も `STALE` として扱う。さらに基準日が一致していても、終値が未確定（取引時間中）の場合は `STALE` とし、終値確定後にのみ `PRICED` へ昇格する。終値確定は `is_market_closed()`（`src/infra/market_data.py`）が判定し、対象は `CLOSE_CHECK_ASSET_CLASSES`（`JP_STOCK` / `US_STOCK` / `COMMODITIES` / `FX`、`MUTUAL_FUNDS` は対象外）。過去日は常に確定済みとして扱い、当日は yfinance の `market_state`（`CLOSED`/`POST`/`POSTPOST`）を優先し、取得不可時は JST 時刻ルール（JP株は 15:35 以降、US株・コモディティ・FX は同一の時刻窓で米国市場の引け〜翌寄りに相当する時間帯を引け扱いとする）へフォールバックする。 |
 | `MISSING` | 価格履歴が不足し、評価額を0として縮退した資産 |
 
-### 3.4.1 Daily Metrics Definition (v4 Monthly Input)
+#### 米国市場日付の現行確定方針
+
+v4 日次の基準は `target_date` である。米国株・コモディティ・FX は、`target_date - 1日` 以前で直近の NYSE 実取引日を `trading_date` とし、同日を共通の採用上限とする。実行時刻や後日追加された履歴によって、この上限を先へ動かさない。
+
+値動きの大小、月曜日、米国休場、日本休場だけでは停止しない。`MISSING` または `STALE` がある場合は1回の選択更新後に暫定配信し、CompletionLock を記録しない。全資産が `PRICED` または `STATIC` になった実行だけを確定配信とする。
+
+現行 `DAY` は直近米国セッションの原資産騰落率であり、同じ `trading_date` を参照する複数の `target_date` で繰り返し得る。また、FX も同じ `trading_date` に固定し、純粋な FX 寄与を `DAY` に含めない。採用理由、観測値、既知の制約、将来案は [ADR-0005](../adr/ADR-0005-target-date-us-market-date.md) を正とする。
+
+### 3.4.1 Total Period Return Definition (v4 Mail Display)
+
+v4 メールの全体 `WTD` / `MTD` / `YTD` は、`ShadowLedgerAdapter` が市場資産ごとの期間収益率を期間開始時点相当額で加重平均する。現在評価額を `V_i`、個別期間収益率を小数表記で `r_i` とすると、加重額は `B_i = V_i / (1 + r_i)`、全体値は `Σ(B_i × r_i) / ΣB_i` とする。
+
+これは現在の保有数量を使った概算の市場収益率であり、厳密な TWRR ではない。期間中の外部入出金や売買時点を追跡するSSOTは追加しない。`Portfolio Basis` は `Total Return` 用の累積取得原価としてのみ使用する。`ABSOLUTE_AMOUNT` と現金カテゴリは全体 `WTD` / `MTD` / `YTD` から除外する。
+
+計算式は新規生成分へ前方適用し、送信済みメール、過去台帳、既存 `daily_metrics` は再生成しない。全日分の保有数量スナップショットがない状態での一括再生成は、現在数量を過去へ誤適用するためである。この定義は米国市場日付、終値確定、FX鮮度の仕様を変更しない。
+
+### 3.4.2 Daily Metrics Definition (v4 Monthly Input)
 
 `daily_metrics_YYYYMMDD.json` は `ShadowLedger` から確定論的に生成される月次集約用データである。AIによる主因断定や文章生成は含めない。
 メール用の `DAY` は確定済み台帳から導出する。`YTD` / `MTD` / `WTD` は既存の台帳メトリクスを引き続き利用する。

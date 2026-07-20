@@ -1,8 +1,9 @@
 import json
+from unittest.mock import patch
 
 import pytest
 
-from src.domain.universal_ingester import UniversalIngester
+from src.domain.universal_ingester import CanonicalLedgerInputError, UniversalIngester
 
 _CLOSED = lambda asset_class, symbol, target_date: True
 _OPEN = lambda asset_class, symbol, target_date: False
@@ -10,6 +11,157 @@ _OPEN = lambda asset_class, symbol, target_date: False
 
 def _write_history(history_dir, name, content):
     (history_dir / f"{name}.csv").write_text(content, encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "missing_a",
+        "unreadable_a",
+        "invalid_a",
+        "missing_b",
+        "unreadable_b",
+        "invalid_b",
+        "partial_b",
+    ],
+)
+def test_required_ssot_failure_preserves_previous_canonical_ledger(tmp_path, failure):
+    funds_csv = tmp_path / "market_units.csv"
+    external_json = tmp_path / "external_assets.json"
+    history_dir = tmp_path / "history"
+    output_path = tmp_path / "v4_shadow_ledger.json"
+    history_dir.mkdir()
+    output_path.write_text('{"previous":"valid"}\n', encoding="utf-8")
+
+    valid_a = (
+        "name,asset_class,currency,units,source_symbol,audit_match_key,csv_url\n"
+        "FundA,MUTUAL_FUNDS,JPY,1,FundA,,\n"
+    )
+    valid_b = {"default": {"items": [{"category": "CASH", "amount": 1000, "name": "Cash"}]}}
+
+    if failure == "unreadable_a":
+        funds_csv.mkdir()
+    elif failure == "invalid_a":
+        funds_csv.write_text(
+            valid_a + "Broken,MUTUAL_FUNDS,JPY,not-a-number,Broken,,\n",
+            encoding="utf-8",
+        )
+    elif failure != "missing_a":
+        funds_csv.write_text(valid_a, encoding="utf-8")
+
+    if failure == "unreadable_b":
+        external_json.mkdir()
+    elif failure == "invalid_b":
+        external_json.write_text("[]", encoding="utf-8")
+    elif failure == "partial_b":
+        external_json.write_text(
+            json.dumps(
+                {
+                    "default": {
+                        "items": [
+                            {"category": "CASH", "amount": 1000, "name": "Cash"},
+                            {"category": "CASH", "amount": "invalid", "name": "Broken"},
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+    elif failure != "missing_b":
+        external_json.write_text(json.dumps(valid_b), encoding="utf-8")
+
+    ingester = UniversalIngester(
+        funds_csv_path=str(funds_csv),
+        external_assets_path=str(external_json),
+        history_dir=str(history_dir),
+    )
+
+    with pytest.raises(CanonicalLedgerInputError):
+        ingester.run("2026-04-25", output_path=str(output_path))
+
+    assert output_path.read_text(encoding="utf-8") == '{"previous":"valid"}\n'
+
+
+def test_canonical_ledger_atomic_replace_failure_preserves_previous_file(tmp_path):
+    funds_csv = tmp_path / "market_units.csv"
+    external_json = tmp_path / "external_assets.json"
+    history_dir = tmp_path / "history"
+    output_path = tmp_path / "v4_shadow_ledger.json"
+    history_dir.mkdir()
+    funds_csv.write_text(
+        "name,asset_class,currency,units,source_symbol,audit_match_key,csv_url\n",
+        encoding="utf-8",
+    )
+    external_json.write_text(
+        json.dumps({"default": {"items": [{"category": "CASH", "amount": 1000, "name": "Cash"}]}}),
+        encoding="utf-8",
+    )
+    output_path.write_text('{"previous":"valid"}\n', encoding="utf-8")
+    ingester = UniversalIngester(
+        funds_csv_path=str(funds_csv),
+        external_assets_path=str(external_json),
+        history_dir=str(history_dir),
+    )
+
+    with patch("src.lib.atomic_write.os.replace", side_effect=OSError("replace failed")):
+        with pytest.raises(OSError, match="replace failed"):
+            ingester.run("2026-04-25", output_path=str(output_path))
+
+    assert output_path.read_text(encoding="utf-8") == '{"previous":"valid"}\n'
+    assert [item for item in tmp_path.iterdir() if item.name.endswith(".tmp")] == []
+
+
+def test_minimal_documented_ssot_a_schema_uses_existing_defaults(tmp_path):
+    funds_csv = tmp_path / "market_units.csv"
+    external_json = tmp_path / "external_assets.json"
+    history_dir = tmp_path / "history"
+    history_dir.mkdir()
+    funds_csv.write_text(
+        "name,units,csv_url\nFundA,20000,\n",
+        encoding="utf-8",
+    )
+    external_json.write_text(json.dumps({}), encoding="utf-8")
+    _write_history(history_dir, "FundA", "基準日,基準価額\n2026-04-20,12000\n")
+
+    ledger = UniversalIngester(
+        funds_csv_path=str(funds_csv),
+        external_assets_path=str(external_json),
+        history_dir=str(history_dir),
+    ).build_shadow_ledger("2026-04-20")
+
+    assert len(ledger.assets) == 1
+    asset = ledger.assets[0]
+    assert asset.name == "FundA"
+    assert asset.asset_class == "MUTUAL_FUNDS"
+    assert asset.currency == "JPY"
+    assert asset.source_symbol == "FundA"
+    assert asset.current_value_jpy == pytest.approx(24_000)
+
+
+@pytest.mark.parametrize("invalid_month_key", ["2026-00", "2026-13"])
+def test_ssot_b_rejects_out_of_range_month_keys(tmp_path, invalid_month_key):
+    funds_csv = tmp_path / "market_units.csv"
+    external_json = tmp_path / "external_assets.json"
+    history_dir = tmp_path / "history"
+    history_dir.mkdir()
+    funds_csv.write_text("name,units,csv_url\n", encoding="utf-8")
+    external_json.write_text(
+        json.dumps(
+            {
+                invalid_month_key: {
+                    "items": [{"category": "CASH", "amount": 1000, "name": "Cash"}]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CanonicalLedgerInputError, match="invalid top-level key"):
+        UniversalIngester(
+            funds_csv_path=str(funds_csv),
+            external_assets_path=str(external_json),
+            history_dir=str(history_dir),
+        ).build_shadow_ledger("2026-04-20")
 
 
 def test_build_shadow_ledger_merges_market_units_and_absolute_amounts(tmp_path):
@@ -120,7 +272,6 @@ def test_external_assets_falls_back_to_default(tmp_path):
             "default": {
                 "items": [
                     {"category": "CASH", "amount": "3000", "name": "Default Cash"},
-                    {"category": "BROKEN", "amount": "invalid", "name": "Invalid Amount"},
                 ]
             }
         }),
@@ -136,7 +287,6 @@ def test_external_assets_falls_back_to_default(tmp_path):
     values = {record.name: record.current_value_jpy for record in ledger.assets}
     assert ledger.ssot_b_active_key == "default"
     assert values["Default Cash"] == pytest.approx(3_000)
-    assert values["Invalid Amount"] == pytest.approx(0)
     assert ledger.total_value_jpy == pytest.approx(3_000)
 
 

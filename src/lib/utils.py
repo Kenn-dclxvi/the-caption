@@ -38,9 +38,10 @@ class SystemUtils:
         return ""
 
     @staticmethod
-    def set_flag(path: str, val: str) -> None:
+    def set_flag(path: str, val: str) -> bool:
         try:
             dir_ = os.path.dirname(os.path.abspath(path))
+            os.makedirs(dir_, exist_ok=True)
             fd, tmp_path = tempfile.mkstemp(dir=dir_)
             try:
                 with os.fdopen(fd, 'w', encoding='utf-8') as f:
@@ -52,8 +53,10 @@ class SystemUtils:
                 except OSError:
                     pass
                 raise
+            return True
         except Exception as e:
             SystemUtils.__logger.error(f"[Guard] Error writing flag to {path}: {e}")
+            return False
 
     @staticmethod
     def parse_pct_str(pct_str: Union[str, float]) -> float:

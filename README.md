@@ -187,6 +187,7 @@ npm --prefix src/web/market_units_editor install
 ## 📜 Version History
 
 ### v4.3 "The Settled Close"
+* **V4期間収益率の集計補正**: 全体 WTD/MTD/YTD は、個別収益率を現在評価額ではなく期間開始時点相当額で加重平均します。値上がり後の資産を過大加重する偏りを除くための概算指標であり、厳密なTWRRや入出金追跡は導入しません。新規生成分だけへ適用し、過去データは再生成しません。米国市場日付の仕様変更は含みません。
 * **STALE DAY 日付注記**: `pricing_status=STALE` の DAY % に `source_date` 月日注記を表示し、古い価格の誤認を防止しました。
 * **Alpha Vantage 補完**: US_STOCK で yfinance の expected-date Close が欠落した場合に、任意の `ALPHA_VANTAGE_API_KEY` で Alpha Vantage 日足 Close を補完します。
 * **終値確定ガード**: JP株/US株/コモディティ/FX は市場クローズ確認後のみ `PRICED` とし、取引時間中の速報値は `STALE` に留めます。
