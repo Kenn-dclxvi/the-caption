@@ -25,6 +25,7 @@ interface PortfolioBasisRecord {
 type PortfolioBasisMap = Record<string, PortfolioBasisRecord>;
 
 const PORT = Number(process.env.PORT || 3001);
+const HOST = process.env.HOST || "127.0.0.1";
 const APP_ROOT = process.cwd();
 const CSV_PATH = path.resolve(APP_ROOT, "../../../data/collection/market_units.csv");
 const EXTERNAL_ASSETS_PATH = path.resolve(APP_ROOT, "../../../data/external_assets.json");
@@ -249,7 +250,7 @@ async function startServer(): Promise<void> {
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  app.listen(PORT, HOST, () => {
     console.log(`THE CAPTION: http://localhost:${PORT}`);
     console.log(`Market Units CSV Path: ${CSV_PATH}`);
     console.log(`External Assets Path: ${EXTERNAL_ASSETS_PATH}`);
