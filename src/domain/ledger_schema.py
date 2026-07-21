@@ -84,6 +84,7 @@ class ShadowLedgerUnitsSource(BaseModel):
 class ShadowLedger(BaseModel):
     schema_version: str = "v4.1-shadow-ledger"
     target_date: str
+    jp_market_date: Optional[str] = None
     generated_at: str
     ssot_a_path: str
     units_source: Optional[ShadowLedgerUnitsSource] = None
@@ -106,6 +107,19 @@ class ShadowLedger(BaseModel):
             datetime.strptime(v, "%Y-%m-%d")
         except ValueError:
             raise ValueError(f"target_date is not a valid calendar date: {v!r}")
+        return v
+
+    @field_validator("jp_market_date")
+    @classmethod
+    def _jp_market_date_format(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not _META_DATE_RE.match(v):
+            raise ValueError(f"jp_market_date format must be YYYY-MM-DD, got: {v!r}")
+        try:
+            datetime.strptime(v, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError(f"jp_market_date is not a valid calendar date: {v!r}")
         return v
 
     @model_validator(mode="after")

@@ -52,7 +52,9 @@ _mock_prompts.US_MARKET_CONTEXT_HOLIDAY = "Holiday: {cal_label} -> {trading_labe
 
 sys.modules.setdefault("playwright",          MagicMock())
 sys.modules.setdefault("playwright.sync_api", MagicMock())
-sys.modules.setdefault("jpholiday",            MagicMock())
+_jpholiday_stub = MagicMock()
+_jpholiday_stub.is_holiday.return_value = False
+sys.modules.setdefault("jpholiday",            _jpholiday_stub)
 sys.modules.setdefault("pandas_market_calendars", MagicMock())
 sys.modules.setdefault("openai",               MagicMock())
 sys.modules.setdefault("anthropic",            MagicMock())

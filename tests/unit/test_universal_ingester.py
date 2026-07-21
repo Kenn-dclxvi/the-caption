@@ -1,5 +1,5 @@
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -313,6 +313,84 @@ def test_jp_stock_is_marked_stale_when_source_date_is_previous_day(tmp_path):
     record = next(r for r in ledger.assets if r.name == "BestAI")
     assert record.source_date == "2026-05-21"
     assert record.pricing_status == "STALE"
+
+
+def test_jp_assets_use_previous_business_date_on_holiday(tmp_path):
+    funds_csv = tmp_path / "funds.csv"
+    external_json = tmp_path / "external_assets.json"
+    history_dir = tmp_path / "history"
+    history_dir.mkdir()
+    funds_csv.write_text(
+        "\n".join([
+            "name,asset_class,currency,units,source_symbol,csv_url",
+            "FundA,MUTUAL_FUNDS,JPY,10000,FundA,",
+            "BestAI,JP_STOCK,JPY,1,408A.T,",
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    external_json.write_text(json.dumps({}), encoding="utf-8")
+    _write_history(
+        history_dir,
+        "FundA",
+        "基準日,基準価額\n2026-07-16,11000\n2026-07-17,12000\n2026-07-20,99999\n",
+    )
+    _write_history(
+        history_dir,
+        "BestAI",
+        "Date,Close\n2026-07-16,300\n2026-07-17,320\n2026-07-20,999\n",
+    )
+    timeline = MagicMock()
+    timeline.get_us_market_context.return_value = {"trading_date": "2026-07-17"}
+    timeline.determine_jp_market_date.return_value = "2026-07-17"
+    close_check = MagicMock(return_value=True)
+
+    ledger = UniversalIngester(
+        funds_csv_path=str(funds_csv),
+        external_assets_path=str(external_json),
+        history_dir=str(history_dir),
+        timeline=timeline,
+        is_closed_fn=close_check,
+    ).build_shadow_ledger("2026-07-20")
+
+    records = {record.name: record for record in ledger.assets}
+    assert records["FundA"].source_date == "2026-07-17"
+    assert records["FundA"].pricing_status == "PRICED"
+    assert records["BestAI"].source_date == "2026-07-17"
+    assert records["BestAI"].pricing_status == "PRICED"
+    assert ledger.jp_market_date == "2026-07-17"
+    timeline.determine_jp_market_date.assert_called_once_with("2026-07-20")
+    close_check.assert_called_once_with("JP_STOCK", "408A.T", "2026-07-17")
+
+
+def test_jp_asset_older_than_previous_business_date_stays_stale_on_holiday(tmp_path):
+    funds_csv = tmp_path / "funds.csv"
+    external_json = tmp_path / "external_assets.json"
+    history_dir = tmp_path / "history"
+    history_dir.mkdir()
+    funds_csv.write_text(
+        "name,asset_class,currency,units,source_symbol,csv_url\n"
+        "BestAI,JP_STOCK,JPY,1,408A.T,\n",
+        encoding="utf-8",
+    )
+    external_json.write_text(json.dumps({}), encoding="utf-8")
+    _write_history(history_dir, "BestAI", "Date,Close\n2026-07-16,300\n")
+    timeline = MagicMock()
+    timeline.get_us_market_context.return_value = {"trading_date": "2026-07-17"}
+    timeline.determine_jp_market_date.return_value = "2026-07-17"
+    close_check = MagicMock(return_value=True)
+
+    ledger = UniversalIngester(
+        funds_csv_path=str(funds_csv),
+        external_assets_path=str(external_json),
+        history_dir=str(history_dir),
+        timeline=timeline,
+        is_closed_fn=close_check,
+    ).build_shadow_ledger("2026-07-20")
+
+    record = next(record for record in ledger.assets if record.name == "BestAI")
+    assert record.source_date == "2026-07-16"
+    assert record.pricing_status == "STALE"
+    close_check.assert_not_called()
 
 
 def test_us_stock_is_marked_stale_when_fx_date_is_previous_to_us_market_date(tmp_path):

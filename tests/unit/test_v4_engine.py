@@ -171,6 +171,7 @@ def harness(tmp_path):
         MockUtils.set_flag = MagicMock(return_value=True)
         timeline.get_target_date.return_value = "2026-04-25"
         timeline.is_holiday.return_value = False
+        timeline.determine_jp_market_date.return_value = "2026-04-25"
         timeline.get_us_market_context.return_value = {
             "trading_date": "2026-04-24",
             "calendar_date": "2026-04-24",
@@ -393,6 +394,43 @@ def test_v4_engine_stale_prices_dispatch_as_provisional(harness):
     mocks["utils"].set_flag.assert_not_called()
     mocks["context_repo"].save.assert_not_called()
     mocks["knowledge"].record_insight.assert_not_called()
+
+
+def test_provisional_dispatch_retries_then_records_completion_and_stops(harness):
+    engine, mocks = harness
+    from src.domain.guard_rail import GuardRail
+
+    target_date = "2026-04-25"
+    lock_state = {"value": "2026-04-24"}
+    stale = _shadow("STALE")
+    priced = _shadow("PRICED")
+    mocks["ingester"].run.side_effect = [stale, stale, priced]
+
+    def record_lock(_path, value):
+        lock_state["value"] = value
+        return True
+
+    mocks["utils"].set_flag.side_effect = record_lock
+    engine._V4PortfolioEngine__guard = GuardRail(mocks["timeline"])
+
+    with patch(
+        "src.domain.guard_rail.SystemUtils.get_flag",
+        side_effect=lambda _path: lock_state["value"],
+    ):
+        assert engine.run(target_date=target_date) is True
+        assert lock_state["value"] == "2026-04-24"
+
+        assert engine.run(target_date=target_date) is True
+        assert lock_state["value"] == target_date
+
+        assert engine.run(target_date=target_date) is False
+
+    assert [call.args[0] for call in mocks["sender"].send.call_args_list] == [
+        "CAPTION [2026-04-25]○",
+        "CAPTION [2026-04-25]",
+    ]
+    assert mocks["ingester"].run.call_count == 3
+    mocks["utils"].set_flag.assert_called_once()
 
 
 def test_v4_engine_retry_includes_fx_dependency_for_us_assets(harness):

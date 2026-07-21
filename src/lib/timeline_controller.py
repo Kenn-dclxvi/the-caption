@@ -7,7 +7,7 @@ from src.lib.logger import setup_logger
 logger = setup_logger(__name__)
 
 class TimelineController:
-    __REV: Final[str] = "Rev. 14"
+    __REV: Final[str] = "Rev. 15"
 
     def __init__(self) -> None:
         logger.info(f"[{self.__REV}] Initializing TimelineController")
@@ -16,6 +16,14 @@ class TimelineController:
         except Exception as e:
             logger.critical(f"[Critical] NYSE calendar unavailable: {e}. US market dates will use weekend-only fallback.")
             self.__nyse = None
+        try:
+            self.__jpx = mcal.get_calendar('JPX')
+        except Exception as e:
+            logger.critical(
+                f"[Critical] JPX calendar unavailable: {e}. "
+                "JP market dates will use the Japanese holiday fallback."
+            )
+            self.__jpx = None
 
     def get_target_date(self, manual_date: Optional[str] = None) -> str:
         if manual_date:
@@ -24,6 +32,48 @@ class TimelineController:
         while self.is_holiday(candidate.strftime("%Y-%m-%d")):
             candidate -= datetime.timedelta(days=1)
         return candidate.strftime("%Y-%m-%d")
+
+    def determine_jp_market_date(self, jp_target_date: str) -> str:
+        """Return the latest JPX cash-market session on or before target_date."""
+        logger.info(f"[Parsing] determine_jp_market_date: {jp_target_date}")
+        try:
+            candidate = datetime.datetime.strptime(jp_target_date, "%Y-%m-%d")
+        except ValueError as e:
+            logger.error(f"[Critical] JP market date parsing failed: {e}")
+            return jp_target_date
+
+        try:
+            if self.__jpx is not None:
+                start_date = candidate - datetime.timedelta(days=31)
+                schedule = self.__jpx.schedule(start_date=start_date, end_date=candidate)
+                if len(schedule.index) > 0:
+                    result = schedule.index[-1].strftime("%Y-%m-%d")
+                    logger.info(f"[Parsing] JPX trading date identified: {result}")
+                    return result
+                logger.warning("[Parsing] No valid JPX schedule found. Using fallback logic.")
+            else:
+                logger.warning("[Parsing] JPX calendar instance missing. Using fallback logic.")
+
+            return self._fallback_jp_market_date(candidate)
+        except Exception as e:
+            logger.error(f"[Critical] JP market date determination failed: {e}")
+            return self._fallback_jp_market_date(candidate)
+
+    def _fallback_jp_market_date(self, candidate_dt: datetime.datetime) -> str:
+        while self._is_jp_market_closed_by_rule(candidate_dt):
+            candidate_dt -= datetime.timedelta(days=1)
+        result = candidate_dt.strftime("%Y-%m-%d")
+        logger.info(f"[Parsing] Fallback JPX trading date identified: {result}")
+        return result
+
+    def _is_jp_market_closed_by_rule(self, candidate_dt: datetime.datetime) -> bool:
+        month_day = (candidate_dt.month, candidate_dt.day)
+        exchange_new_year_closure = month_day in {(1, 1), (1, 2), (1, 3), (12, 31)}
+        return (
+            candidate_dt.weekday() >= 5
+            or bool(jpholiday.is_holiday(candidate_dt))
+            or exchange_new_year_closure
+        )
 
     def get_previous_month_last_business_day(self, current_date_str: str) -> str:
         logger.info(f"[Parsing] Calculating previous month last business day for {current_date_str}")

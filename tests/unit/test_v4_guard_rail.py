@@ -44,7 +44,34 @@ def test_context_scope_does_not_bypass_completion_lock():
         )
 
     assert result is False
-    timeline.is_holiday.assert_not_called()
+    timeline.determine_jp_market_date.assert_not_called()
+
+
+def test_absent_completion_lock_allows_repeated_attempts():
+    timeline = MagicMock()
+    guard = GuardRail(timeline)
+
+    with patch("src.domain.guard_rail.SystemUtils.get_flag", return_value="2026-07-17"), \
+         patch("src.domain.guard_rail.SystemUtils.set_flag") as set_flag:
+        first = guard.should_proceed(
+            target_date_str="2026-07-20",
+            lock_file="completion.lock",
+            force_send=False,
+            scope="all",
+            format_test=False,
+        )
+        second = guard.should_proceed(
+            target_date_str="2026-07-20",
+            lock_file="completion.lock",
+            force_send=False,
+            scope="all",
+            format_test=False,
+        )
+
+    assert first is True
+    assert second is True
+    timeline.determine_jp_market_date.assert_not_called()
+    set_flag.assert_not_called()
 
 
 def test_empty_shadow_ledger_cannot_dispatch():
