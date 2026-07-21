@@ -47,6 +47,34 @@ def test_context_scope_does_not_bypass_completion_lock():
     timeline.is_holiday.assert_not_called()
 
 
+def test_holiday_allows_repeated_attempts_until_completion_lock_exists():
+    timeline = MagicMock()
+    timeline.is_holiday.return_value = True
+    guard = GuardRail(timeline)
+
+    with patch("src.domain.guard_rail.SystemUtils.get_flag", return_value="2026-07-17"), \
+         patch("src.domain.guard_rail.SystemUtils.set_flag") as set_flag:
+        first = guard.should_proceed(
+            target_date_str="2026-07-20",
+            lock_file="completion.lock",
+            force_send=False,
+            scope="all",
+            format_test=False,
+        )
+        second = guard.should_proceed(
+            target_date_str="2026-07-20",
+            lock_file="completion.lock",
+            force_send=False,
+            scope="all",
+            format_test=False,
+        )
+
+    assert first is True
+    assert second is True
+    assert timeline.is_holiday.call_count == 2
+    set_flag.assert_not_called()
+
+
 def test_empty_shadow_ledger_cannot_dispatch():
     guard = GuardRail(MagicMock())
 

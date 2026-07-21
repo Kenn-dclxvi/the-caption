@@ -111,16 +111,11 @@ ShadowLedger生成
 | **2. Local Check** | ローカルに当日のデータが存在するか？ |**YES**: 中身を鑑定 (Step 3へ)<br>**NO**: 取得へ (Step 4へ) |
 | **3. Freshness** | ローカルデータは VERIFIED か？ |**VERIFIED**: 取得スキップ、配信へ<br>**STAGNANT**: **再取得 (Force Fetch)** を決断 |
 
-**Holiday Guard (日次 GuardRail の休日判定)**
+**日本休場日の日次判定**
 
-GuardRail は `target_date` が `is_holiday()` = `True` の場合、以下のロジックで処理する。
+v4 日次の自動実行は当日を `target_date` とするため、日本休場日も通常フローへ進む。JP株・投資信託の価格基準日は、`TimelineController.determine_jp_market_date()` が返す `target_date` 以前の直近JP営業日とする。基準日に到達した国内資産は `PRICED` とし、`V4LedgerFinalizer` が `DAY +0 / +0.00%` に固定する。
 
-| 条件 | アクション |
-| :--- | :--- |
-| `LAST_ACCESS_FILE` が本日付と一致 | 即時終了 (TERMINATE) |
-| 本日初回アクセス | `LAST_ACCESS_FILE` に本日付を書き込み、処理を続行 |
-
-`TimelineController.get_target_date()` (Rev. 11) は非休日を自動選択するため、通常フローではこのパスに到達しない。`manual_date` で休日を明示指定した場合のみ発動する。
+GuardRail は日本休場日を理由に定刻実行を一回へ制限しない。暫定配信後は次の定刻実行で再取得を許可し、確定配信後は CompletionLock で停止する。旧 `LAST_ACCESS_FILE` は v4 日次の判定には使用しない。
 
 **Monthly Execution Flow (月次パイプライン)**
 | フェーズ | 状態チェック | アクション |

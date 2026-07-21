@@ -30,6 +30,7 @@ _US_STOCK_ASSET_CLASS: Final[str] = "US_STOCK"
 _COMMODITY_ASSET_CLASS: Final[str] = "COMMODITIES"
 _COMMODITY_OZ_TO_G: Final[float] = 31.1034768
 _US_MARKET_DATE_CLASSES: Final[set[str]] = {"US_STOCK", "COMMODITIES", "FX"}
+_JP_MARKET_DATE_CLASSES: Final[set[str]] = {"MUTUAL_FUNDS", "JP_STOCK"}
 _REQUIRED_SSOT_A_COLUMNS: Final[set[str]] = {
     "name",
     "units",
@@ -126,6 +127,15 @@ class UniversalIngester:
                 return str(trading_date)
         except Exception as exc:
             logger.warning(f"[Guard] Failed to resolve US market date for {target_date}; using target_date: {exc}")
+        return target_date
+
+    def _resolve_jp_market_date(self, target_date: str) -> str:
+        try:
+            trading_date = self.timeline.determine_jp_market_date(target_date)
+            if trading_date:
+                return str(trading_date)
+        except Exception as exc:
+            logger.warning(f"[Guard] Failed to resolve JP market date for {target_date}; using target_date: {exc}")
         return target_date
 
     def run(
@@ -357,7 +367,14 @@ class UniversalIngester:
         us_market_date: str,
         fx_metrics: Optional[Dict[str, Any]],
     ) -> ShadowAssetRecord:
-        metrics = self._calculate_market_asset(asset, target_date, us_market_date, fx_metrics)
+        expected_source_date = self._expected_source_date(asset, target_date, us_market_date)
+        metrics = self._calculate_market_asset(
+            asset,
+            target_date,
+            us_market_date,
+            expected_source_date,
+            fx_metrics,
+        )
         if metrics is None:
             return ShadowAssetRecord(
                 source="MARKET_UNITS",
@@ -373,19 +390,18 @@ class UniversalIngester:
             )
 
         source_date = metrics["date"]
-        expected_source_date = self._expected_source_date(asset, target_date, us_market_date)
         expected_fx_date = self._expected_fx_date(asset, target_date, us_market_date)
         fx_date = metrics.get("fx_date")
         is_price_stale = source_date < expected_source_date
         is_fx_stale = expected_fx_date is not None and (fx_date is None or fx_date < expected_fx_date)
-        # Only check close status for exchange-traded assets on the current target date.
+        # Only check close status for exchange-traded assets on the expected price date.
         # MUTUAL_FUNDS are excluded (NAV is settled externally, not via market close).
         # Past dates always pass — historical prices are final regardless of execution time.
         asset_class = asset.get("asset_class", "")
         is_close_unconfirmed = (
             not is_price_stale
             and asset_class in CLOSE_CHECK_ASSET_CLASSES
-            and not self._is_closed_fn(asset_class, asset.get("source_symbol", ""), target_date)
+            and not self._is_closed_fn(asset_class, asset.get("source_symbol", ""), expected_source_date)
         )
         is_stale = is_price_stale or is_fx_stale or is_close_unconfirmed
         warnings: List[str] = []
@@ -424,6 +440,8 @@ class UniversalIngester:
         currency = str(asset.get("currency") or "")
         if asset_class in _US_MARKET_DATE_CLASSES or currency == "USD":
             return us_market_date
+        if asset_class in _JP_MARKET_DATE_CLASSES:
+            return self._resolve_jp_market_date(target_date)
         return target_date
 
     def _expected_fx_date(
@@ -453,16 +471,22 @@ class UniversalIngester:
         asset: Dict[str, Any],
         target_date: str,
         us_market_date: str,
+        expected_source_date: str,
         fx_metrics: Optional[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
         if asset["asset_class"] == "MUTUAL_FUNDS":
-            return self._calculate_fund_value(asset, target_date)
+            return self._calculate_fund_value(asset, target_date, expected_source_date)
         if asset["asset_class"] == _COMMODITY_ASSET_CLASS:
             return self._calculate_commodity_value(asset, target_date, us_market_date, fx_metrics)
-        return self._calculate_stock_value(asset, target_date, us_market_date, fx_metrics)
+        return self._calculate_stock_value(asset, target_date, expected_source_date, fx_metrics)
 
-    def _calculate_fund_value(self, asset: Dict[str, Any], target_date: str) -> Optional[Dict[str, Any]]:
-        df_up = self._history_rows_up(asset["name"], "基準日", target_date)
+    def _calculate_fund_value(
+        self,
+        asset: Dict[str, Any],
+        target_date: str,
+        price_target_date: str,
+    ) -> Optional[Dict[str, Any]]:
+        df_up = self._history_rows_up(asset["name"], "基準日", price_target_date)
         if df_up is None or df_up.empty:
             return None
         latest = df_up.iloc[-1]
@@ -493,7 +517,7 @@ class UniversalIngester:
         self,
         asset: Dict[str, Any],
         target_date: str,
-        us_market_date: str,
+        price_target_date: str,
         fx_metrics: Optional[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
         # USD-denominated stocks use US market dates in the history CSV.
@@ -501,7 +525,6 @@ class UniversalIngester:
         # (the start of the new JP week), so the WTD origin must be anchored to
         # the JP target_date's week boundary rather than the US source date's.
         uses_us_market_date = asset["asset_class"] == _US_STOCK_ASSET_CLASS or asset["currency"] == "USD"
-        price_target_date = us_market_date if uses_us_market_date else target_date
         week_origin = target_date if uses_us_market_date else None
         price_metrics = self._calculate_market_price(asset, price_target_date, week_origin=week_origin)
         if price_metrics is None:

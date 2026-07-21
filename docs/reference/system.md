@@ -224,7 +224,7 @@ project_root/
 ├── data/
 │   ├── knowledge_bank.md         # [Knowledge Base] AI鑑定結果の累積記録
 │   ├── last_sent_mail_V2.txt     # [Lock File] 日次レポートの配信ロックファイル
-│   ├── last_access_date.txt     # [Lock File] 祝日時の同一日二重実行防止（GuardRail 参照）
+│   ├── last_access_date.txt      # [Legacy] v4日次では未使用
 │   ├── last_sent_weekly.txt      # [Lock File] 週次レポートの配信ロックファイル
 │   ├── last_sent_monthly.txt     # [Lock File] 月次レポートの配信ロックファイル
 │   ├── last_sent_collection.txt  # [Lock File] COLLECTIONレポートの配信ロックファイル (Format: YYYY-MM-DD,COUNT)
@@ -307,14 +307,18 @@ SSOT A の正本は `data/collection/market_units.csv` であり、runtime は�
 | :--- | :--- |
 | `PRICED` | 市場履歴から価格評価できた資産 |
 | `STATIC` | 絶対額として確定している現金・外部資産 |
-| `STALE` | 価格は取得できたが、資産クラスごとの基準日（JP株/投信=`target_date`、US株/コモディティ/FX=`trading_date`）に未到達の資産。USD建て資産・コモディティは、為替（FX）の基準日未到達も `STALE` として扱う。さらに基準日が一致していても、終値が未確定（取引時間中）の場合は `STALE` とし、終値確定後にのみ `PRICED` へ昇格する。終値確定は `is_market_closed()`（`src/infra/market_data.py`）が判定し、対象は `CLOSE_CHECK_ASSET_CLASSES`（`JP_STOCK` / `US_STOCK` / `COMMODITIES` / `FX`、`MUTUAL_FUNDS` は対象外）。過去日は常に確定済みとして扱い、当日は yfinance の `market_state`（`CLOSED`/`POST`/`POSTPOST`）を優先し、取得不可時は JST 時刻ルール（JP株は 15:35 以降、US株・コモディティ・FX は同一の時刻窓で米国市場の引け〜翌寄りに相当する時間帯を引け扱いとする）へフォールバックする。 |
+| `STALE` | 価格は取得できたが、資産クラスごとの基準日（JP株/投信=`target_date` 以前の直近JP営業日、US株/コモディティ/FX=`trading_date`）に未到達の資産。USD建て資産・コモディティは、為替（FX）の基準日未到達も `STALE` として扱う。さらに基準日が一致していても、終値が未確定（取引時間中）の場合は `STALE` とし、終値確定後にのみ `PRICED` へ昇格する。終値確定は `is_market_closed()`（`src/infra/market_data.py`）へ対象資産の基準日を渡して判定し、対象は `CLOSE_CHECK_ASSET_CLASSES`（`JP_STOCK` / `US_STOCK` / `COMMODITIES` / `FX`、`MUTUAL_FUNDS` は対象外）。過去日は常に確定済みとして扱い、当日は yfinance の `market_state`（`CLOSED`/`POST`/`POSTPOST`）を優先し、取得不可時は JST 時刻ルール（JP株は 15:35 以降、US株・コモディティ・FX は同一の時刻窓で米国市場の引け〜翌寄りに相当する時間帯を引け扱いとする）へフォールバックする。 |
 | `MISSING` | 価格履歴が不足し、評価額を0として縮退した資産 |
+
+#### 国内市場日付の現行確定方針
+
+JP株・投資信託は、`target_date` が日本の休場日なら同日以前の直近JP営業日を価格基準日とする。たとえば `target_date=2026-07-20` の価格基準日は `2026-07-17` であり、同日価格は `PRICED`、それより古い価格は `STALE` とする。休場日の国内資産は `V4LedgerFinalizer` が `DAY +0 / +0.00%` に固定する。
 
 #### 米国市場日付の現行確定方針
 
 v4 日次の基準は `target_date` である。米国株・コモディティ・FX は、`target_date - 1日` 以前で直近の NYSE 実取引日を `trading_date` とし、同日を共通の採用上限とする。実行時刻や後日追加された履歴によって、この上限を先へ動かさない。
 
-値動きの大小、月曜日、米国休場、日本休場だけでは停止しない。`MISSING` または `STALE` がある場合は1回の選択更新後に暫定配信し、CompletionLock を記録しない。全資産が `PRICED` または `STATIC` になった実行だけを確定配信とする。
+値動きの大小、月曜日、米国休場、日本休場だけでは停止しない。`MISSING` または `STALE` がある場合は1回の選択更新後に暫定配信し、CompletionLock を記録しない。休日でも次の定刻実行を許可し、全資産が `PRICED` または `STATIC` になった実行だけを確定配信する。確定後の再実行は CompletionLock で停止する。
 
 現行 `DAY` は直近米国セッションの原資産騰落率であり、同じ `trading_date` を参照する複数の `target_date` で繰り返し得る。また、FX も同じ `trading_date` に固定し、純粋な FX 寄与を `DAY` に含めない。採用理由、観測値、既知の制約、将来案は [ADR-0005](../adr/ADR-0005-target-date-us-market-date.md) を正とする。
 

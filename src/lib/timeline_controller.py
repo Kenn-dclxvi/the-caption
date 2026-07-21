@@ -25,6 +25,21 @@ class TimelineController:
             candidate -= datetime.timedelta(days=1)
         return candidate.strftime("%Y-%m-%d")
 
+    def determine_jp_market_date(self, jp_target_date: str) -> str:
+        """Return the latest Japanese business day on or before target_date."""
+        logger.info(f"[Parsing] determine_jp_market_date: {jp_target_date}")
+        try:
+            candidate = datetime.datetime.strptime(jp_target_date, "%Y-%m-%d")
+            while self.is_holiday(candidate.strftime("%Y-%m-%d")):
+                candidate -= datetime.timedelta(days=1)
+
+            result = candidate.strftime("%Y-%m-%d")
+            logger.info(f"[Parsing] JP trading date identified: {result}")
+            return result
+        except Exception as e:
+            logger.error(f"[Critical] JP market date determination failed: {e}")
+            return jp_target_date
+
     def get_previous_month_last_business_day(self, current_date_str: str) -> str:
         logger.info(f"[Parsing] Calculating previous month last business day for {current_date_str}")
         try:
