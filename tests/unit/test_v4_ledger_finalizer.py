@@ -7,6 +7,7 @@ from src.domain.v4_ledger_finalizer import V4LedgerFinalizer
 def _shadow() -> ShadowLedger:
     return ShadowLedger(
         target_date="2026-04-29",
+        jp_market_date="2026-04-28",
         generated_at="2026-04-29T20:00:00",
         ssot_a_path="data/collection/market_units.csv",
         ssot_b_path="data/external_assets.json",
@@ -47,7 +48,6 @@ def _shadow() -> ShadowLedger:
 
 def test_finalize_zeroes_jp_market_diff_on_holiday() -> None:
     timeline = MagicMock()
-    timeline.is_holiday.return_value = True
 
     finalizer = V4LedgerFinalizer(timeline)
     finalized = finalizer.finalize(_shadow())
@@ -62,4 +62,17 @@ def test_finalize_zeroes_jp_market_diff_on_holiday() -> None:
     assert us_stock.diff_pct == 2.2
     assert cash.diff_val_jpy == 0.0
     assert cash.diff_pct == 0.0
-    timeline.is_holiday.assert_called_once_with("2026-04-29")
+    timeline.determine_jp_market_date.assert_not_called()
+
+
+def test_finalize_zeroes_jp_market_diff_on_exchange_specific_holiday() -> None:
+    timeline = MagicMock()
+    shadow = _shadow().model_copy(
+        update={"target_date": "2026-12-31", "jp_market_date": "2026-12-30"}
+    )
+
+    finalized = V4LedgerFinalizer(timeline).finalize(shadow)
+
+    assert finalized.assets[0].diff_val_jpy == 0.0
+    assert finalized.assets[0].diff_pct == 0.0
+    timeline.determine_jp_market_date.assert_not_called()

@@ -11,7 +11,7 @@ _JP_SETTLEMENT_CLASSES: Final[set[str]] = {"MUTUAL_FUNDS", "JP_STOCK"}
 
 
 class V4LedgerFinalizer:
-    __REV: Final[str] = "Rev. 1"
+    __REV: Final[str] = "Rev. 2"
 
     def __init__(self, timeline: TimelineController) -> None:
         logger.info(f"[{self.__REV}] Initializing V4LedgerFinalizer")
@@ -19,10 +19,14 @@ class V4LedgerFinalizer:
 
     def finalize(self, shadow_ledger: ShadowLedger) -> ShadowLedger:
         target_date = shadow_ledger.target_date
-        jp_holiday = self.__timeline.is_holiday(target_date)
+        jp_market_date = (
+            shadow_ledger.jp_market_date
+            or self.__timeline.determine_jp_market_date(target_date)
+        )
+        jp_market_closed = jp_market_date != target_date
 
         finalized_assets = [
-            self.__finalize_asset(asset, target_date, jp_holiday)
+            self.__finalize_asset(asset, target_date, jp_market_closed)
             for asset in shadow_ledger.assets
         ]
 
@@ -35,12 +39,12 @@ class V4LedgerFinalizer:
         self,
         asset: ShadowAssetRecord,
         target_date: str,
-        jp_holiday: bool,
+        jp_market_closed: bool,
     ) -> ShadowAssetRecord:
         if asset.source == "ABSOLUTE_AMOUNT" or asset.pricing_status == "STATIC":
             return asset.model_copy(update={"diff_val_jpy": 0.0, "diff_pct": 0.0})
 
-        if jp_holiday and asset.asset_class in _JP_SETTLEMENT_CLASSES:
+        if jp_market_closed and asset.asset_class in _JP_SETTLEMENT_CLASSES:
             if asset.diff_val_jpy in (None, 0, 0.0) and asset.diff_pct in (None, 0, 0.0):
                 return asset
             logger.info(

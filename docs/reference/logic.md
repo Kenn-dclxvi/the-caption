@@ -113,9 +113,9 @@ ShadowLedger生成
 
 **日本休場日の日次判定**
 
-v4 日次の自動実行は当日を `target_date` とするため、日本休場日も通常フローへ進む。JP株・投資信託の価格基準日は、`TimelineController.determine_jp_market_date()` が返す `target_date` 以前の直近JP営業日とする。基準日に到達した国内資産は `PRICED` とし、`V4LedgerFinalizer` が `DAY +0 / +0.00%` に固定する。
+v4 日次の自動実行は当日を `target_date` とするため、日本休場日も通常フローへ進む。JP株・投資信託の価格基準日は、`TimelineController.determine_jp_market_date()` が JPX現物市場カレンダーから返す `target_date` 以前の直近取引日とする。国民の祝日に加え、1月2日・1月3日・12月31日などJPX固有の休業日も含む。解決結果は `ShadowLedger.jp_market_date` に一度だけ保持し、全JP資産の価格上限・鮮度判定・終値確認と `V4LedgerFinalizer` の `DAY +0 / +0.00%` 判定で共有する。
 
-GuardRail は日本休場日を理由に定刻実行を一回へ制限しない。暫定配信後は次の定刻実行で再取得を許可し、確定配信後は CompletionLock で停止する。旧 `LAST_ACCESS_FILE` は v4 日次の判定には使用しない。
+GuardRail は市場休日カレンダーを送信可否に使わず、CompletionLockだけを確認する。暫定配信後は次の定刻実行で再取得を許可し、確定配信後は CompletionLock で停止する。旧 `LAST_ACCESS_FILE` は v4 日次の判定には使用しない。
 
 **Monthly Execution Flow (月次パイプライン)**
 | フェーズ | 状態チェック | アクション |

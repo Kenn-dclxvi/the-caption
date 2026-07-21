@@ -6,7 +6,7 @@ from src.lib.logger import setup_logger
 from src.domain.ledger_schema import ShadowLedger
 
 class GuardRail:
-    __REV: Final[str] = "Rev. 8"
+    __REV: Final[str] = "Rev. 9"
     __logger = setup_logger(__name__)
 
     def __init__(self, timeline: TimelineController) -> None:
@@ -26,12 +26,6 @@ class GuardRail:
         if SystemUtils.get_flag(lock_file) == target_date_str:
             self.__logger.info(f"[Guard] Report for {target_date_str} already sent. Stopping.")
             return False
-
-        if self.__timeline.is_holiday(target_date_str):
-            self.__logger.info(
-                f"[Guard] Holiday detected ({target_date_str}). "
-                "Proceeding; pricing freshness and CompletionLock control finalization."
-            )
 
         self.__logger.info(f"[Guard] All checks passed for {target_date_str}. Proceeding.")
         return True

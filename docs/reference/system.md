@@ -297,6 +297,7 @@ v4 日次では `ShadowLedger` を生成後に確定判定へ回し、メール�
 | `ssot_b_active_key` | string | 採用した月次キー。対象月がなければ `default` |
 | `total_value_jpy` | float | 全資産の評価額合計 |
 | `return_base_value_jpy` | float? | `MARKET_UNITS` 合計。`total_return_*` の基準評価額 |
+| `jp_market_date` | string \| null | `target_date` 以前の直近JPX現物市場取引日。日次Ingesterが実行単位で一度だけ解決する。 |
 | `assets` | array | `ShadowAssetRecord` のフラット配列 |
 
 SSOT A の正本は `data/collection/market_units.csv` であり、runtime は旧 `data/collection/funds.csv` へ自動フォールバックしない。日付別固定入力は `data/current/collection_units_YYYYMMDD.json` に `schema_version = market_units_snapshot.v1` / `snapshot_type = FULL_SNAPSHOT` として保存する。`daily` mode は snapshot 欠損・不正時に warning を出して live CSV へ fallback し、`strict` mode は不正 snapshot を blocking とし、欠損時は明示許可がある場合のみ live CSV を採用する。
@@ -312,7 +313,9 @@ SSOT A の正本は `data/collection/market_units.csv` であり、runtime は�
 
 #### 国内市場日付の現行確定方針
 
-JP株・投資信託は、`target_date` が日本の休場日なら同日以前の直近JP営業日を価格基準日とする。たとえば `target_date=2026-07-20` の価格基準日は `2026-07-17` であり、同日価格は `PRICED`、それより古い価格は `STALE` とする。休場日の国内資産は `V4LedgerFinalizer` が `DAY +0 / +0.00%` に固定する。
+JP株・投資信託は、`pandas-market-calendars` の `JPX`（現物市場）カレンダーを取引日の正本とし、`target_date` 以前の直近JPX取引日を価格基準日とする。`jpholiday` による国民の祝日判定はJPX取引日の正本にしない。JPXカレンダーを利用できない場合だけ、土日・国民の祝日・1月1〜3日・12月31日を休場とするフォールバックを使う。
+
+たとえば `target_date=2026-07-20` の価格基準日は `2026-07-17`、`target_date=2026-12-31` と `2027-01-01` の価格基準日は `2026-12-30` である。基準日価格は `PRICED`、それより古い価格は `STALE` とする。解決した値は `ShadowLedger.jp_market_date` に保持し、価格履歴の選択・鮮度判定・終値確認・休場日の国内 `DAY +0 / +0.00%` に共通利用する。
 
 #### 米国市場日付の現行確定方針
 

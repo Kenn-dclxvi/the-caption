@@ -44,12 +44,11 @@ def test_context_scope_does_not_bypass_completion_lock():
         )
 
     assert result is False
-    timeline.is_holiday.assert_not_called()
+    timeline.determine_jp_market_date.assert_not_called()
 
 
-def test_holiday_allows_repeated_attempts_until_completion_lock_exists():
+def test_absent_completion_lock_allows_repeated_attempts():
     timeline = MagicMock()
-    timeline.is_holiday.return_value = True
     guard = GuardRail(timeline)
 
     with patch("src.domain.guard_rail.SystemUtils.get_flag", return_value="2026-07-17"), \
@@ -71,7 +70,7 @@ def test_holiday_allows_repeated_attempts_until_completion_lock_exists():
 
     assert first is True
     assert second is True
-    assert timeline.is_holiday.call_count == 2
+    timeline.determine_jp_market_date.assert_not_called()
     set_flag.assert_not_called()
 
 

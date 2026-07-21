@@ -44,7 +44,7 @@ class CanonicalLedgerInputError(ValueError):
 
 
 class UniversalIngester:
-    __REV: Final[str] = "Rev. 1"
+    __REV: Final[str] = "Rev. 2"
 
     def __init__(
         self,
@@ -84,13 +84,22 @@ class UniversalIngester:
         external_items, active_key = self._load_external_assets(active_date)
         basis_key, total_acquisition_cost = self._load_portfolio_basis(active_date)
         us_market_date = self._resolve_us_market_date(active_date)
+        jp_market_date = self._resolve_jp_market_date(active_date)
 
         fx_metrics = self._calculate_fx_metrics(market_assets, us_market_date)
         records: List[ShadowAssetRecord] = []
         for asset in market_assets:
             if asset["asset_class"] == _FX_ASSET_CLASS:
                 continue
-            records.append(self._build_market_record(asset, active_date, us_market_date, fx_metrics))
+            records.append(
+                self._build_market_record(
+                    asset,
+                    active_date,
+                    us_market_date,
+                    jp_market_date,
+                    fx_metrics,
+                )
+            )
 
         for item in external_items:
             records.append(self._build_external_record(item))
@@ -105,6 +114,7 @@ class UniversalIngester:
         )
         return ShadowLedger(
             target_date=active_date,
+            jp_market_date=jp_market_date,
             generated_at=datetime.now().isoformat(timespec="seconds"),
             ssot_a_path=self.ssot_a_path,
             units_source=units_resolution["source"],
@@ -365,9 +375,15 @@ class UniversalIngester:
         asset: Dict[str, Any],
         target_date: str,
         us_market_date: str,
+        jp_market_date: str,
         fx_metrics: Optional[Dict[str, Any]],
     ) -> ShadowAssetRecord:
-        expected_source_date = self._expected_source_date(asset, target_date, us_market_date)
+        expected_source_date = self._expected_source_date(
+            asset,
+            target_date,
+            us_market_date,
+            jp_market_date,
+        )
         metrics = self._calculate_market_asset(
             asset,
             target_date,
@@ -435,13 +451,14 @@ class UniversalIngester:
         asset: Dict[str, Any],
         target_date: str,
         us_market_date: str,
+        jp_market_date: str,
     ) -> str:
         asset_class = str(asset.get("asset_class") or "")
         currency = str(asset.get("currency") or "")
         if asset_class in _US_MARKET_DATE_CLASSES or currency == "USD":
             return us_market_date
         if asset_class in _JP_MARKET_DATE_CLASSES:
-            return self._resolve_jp_market_date(target_date)
+            return jp_market_date
         return target_date
 
     def _expected_fx_date(

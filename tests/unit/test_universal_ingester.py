@@ -357,6 +357,8 @@ def test_jp_assets_use_previous_business_date_on_holiday(tmp_path):
     assert records["FundA"].pricing_status == "PRICED"
     assert records["BestAI"].source_date == "2026-07-17"
     assert records["BestAI"].pricing_status == "PRICED"
+    assert ledger.jp_market_date == "2026-07-17"
+    timeline.determine_jp_market_date.assert_called_once_with("2026-07-20")
     close_check.assert_called_once_with("JP_STOCK", "408A.T", "2026-07-17")
 
 
