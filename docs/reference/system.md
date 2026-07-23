@@ -147,6 +147,8 @@ Broker 証券サイトからデータを取得する責務を以下の3層に分
 * **役割**: React + Express ベースのローカル編集 UI を起動し、`data/collection/market_units.csv` と `data/external_assets.json` を直接 read/write する。
 * **前提**: `npm --prefix src/web/market_units_editor install` 実行済みであること。
 * **起動URL**: PRD は `http://localhost:3001`、DEV は `http://localhost:3101`。
+* **PRD待受先**: `HOST` 未指定時は `127.0.0.1:3001`。Tailnet公開時もUI自体はlocalhostに限定し、Tailscale Serve がHTTPS 3001番ポートから `http://127.0.0.1:3001` へ中継する。
+* **Tailnetホスト許可**: `VITE_ALLOWED_HOSTS` に完全ホスト名をカンマ区切りで渡す。例: `mac-mini-2024.<tailnet>.ts.net`。Tailscale Serve 経由のHostヘッダをViteが受け付けるために必要。
 * **画面**: `Market Units` と `External Assets` を切り替えて編集する。
 * **UI アイコン**: ブラウザタブのアイコンには `images/MailIcon.png` を流用し、`src/web/market_units_editor/public/mail-icon.png` として配信する。
 * **永続化先**: `data/collection/market_units.csv` と `data/external_assets.json`。保存内容のうち `market_units.csv` は SSOT A として、次回の v4 日次パイプライン `python -m src.app.entrypoints.v4_daily_main` 実行時に参照される。

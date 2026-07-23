@@ -169,6 +169,13 @@ npm --prefix src/web/market_units_editor install
 ```
 起動後は `http://localhost:3001`（PRD）または `http://localhost:3101`（DEV）を開くと `Market Units` と `External Assets` を切り替えて編集できます。保存後は既存の `./run.sh collection -o` などへそのまま接続できます。
 
+PRD は既定で `127.0.0.1:3001` のみで待ち受けます。Tailnet から利用する場合は、UI 起動時にTailscaleの完全ホスト名を `VITE_ALLOWED_HOSTS` へ渡し、Tailscale Serve を3001番ポートで設定します。
+```bash
+VITE_ALLOWED_HOSTS=<machine>.<tailnet>.ts.net ./run.sh collection-web-prd
+tailscale serve --bg --https=3001 http://127.0.0.1:3001
+```
+この構成の接続先は `https://<machine>.<tailnet>.ts.net:3001/` です。Funnel は使用せず、Tailnet 内のアクセスに限定します。
+
 ---
 
 ## 🛠️ Technology Stack
