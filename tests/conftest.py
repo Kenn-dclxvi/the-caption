@@ -55,7 +55,7 @@ sys.modules.setdefault("playwright.sync_api", MagicMock())
 _jpholiday_stub = MagicMock()
 _jpholiday_stub.is_holiday.return_value = False
 sys.modules.setdefault("jpholiday",            _jpholiday_stub)
-sys.modules.setdefault("pandas_market_calendars", MagicMock())
+# Keep pandas_market_calendars real so integration tests exercise JPX calendar data.
 sys.modules.setdefault("openai",               MagicMock())
 sys.modules.setdefault("anthropic",            MagicMock())
 sys.modules.setdefault("yfinance",             MagicMock())
