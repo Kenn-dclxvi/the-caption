@@ -152,8 +152,14 @@ class UniversalIngester:
         self,
         target_date: Optional[str] = None,
         output_path: Optional[str] = None,
+        units_mode: Literal["daily", "strict"] = "daily",
+        allow_live_csv_in_strict: bool = False,
     ) -> ShadowLedger:
-        ledger = self.build_shadow_ledger(target_date)
+        ledger = self.build_shadow_ledger(
+            target_date,
+            units_mode=units_mode,
+            allow_live_csv_in_strict=allow_live_csv_in_strict,
+        )
         if output_path:
             atomic_write_json(output_path, ledger.model_dump())
         return ledger

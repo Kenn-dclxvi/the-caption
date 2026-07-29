@@ -7,6 +7,7 @@ from typing import Any, Dict, Final, List, Literal, Optional, TypedDict
 from zoneinfo import ZoneInfo
 
 from src.config.settings import DIR_COLLECTION, DIR_CURRENT
+from src.lib.atomic_write import atomic_write_json
 
 MARKET_UNITS_CSV: Final[str] = os.path.join(DIR_COLLECTION, "market_units.csv")
 SNAPSHOT_SCHEMA_VERSION: Final[str] = "market_units_snapshot.v1"
@@ -169,6 +170,7 @@ def create_units_snapshot(
     csv_path: str = MARKET_UNITS_CSV,
     target_date: Optional[str] = None,
     output_path: Optional[str] = None,
+    ssot_a_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     active_date = target_date or datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d")
     items = load_market_units_csv(csv_path)
@@ -178,17 +180,39 @@ def create_units_snapshot(
         "target_date": active_date,
         "captured_at": datetime.now(ZoneInfo("Asia/Tokyo")).isoformat(timespec="seconds"),
         "source": {
-            "ssot_a_path": csv_path,
+            "ssot_a_path": ssot_a_path or csv_path,
             "ssot_a_sha256": _sha256_file(csv_path),
         },
         "items": items,
     }
     if output_path:
-        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-            f.write("\n")
+        if os.path.exists(output_path):
+            raise FileExistsError(f"market units snapshot already exists: {output_path}")
+        atomic_write_json(output_path, payload)
     return payload
+
+
+def ensure_units_snapshot(
+    target_date: str,
+    csv_path: str = MARKET_UNITS_CSV,
+    snapshot_dir: Optional[str] = None,
+    allow_create: bool = True,
+) -> str:
+    """Validate and reuse a snapshot, or atomically create today's snapshot."""
+    path = snapshot_path(target_date, snapshot_dir)
+    if os.path.exists(path):
+        load_units_snapshot(path, target_date, csv_path)
+        return path
+    if not allow_create:
+        raise MarketUnitsSnapshotError(f"market units snapshot missing: {path}")
+    create_units_snapshot(
+        csv_path=csv_path,
+        target_date=target_date,
+        output_path=path,
+        ssot_a_path=csv_path,
+    )
+    load_units_snapshot(path, target_date, csv_path)
+    return path
 
 
 def _validate_unique_asset_keys(rows: List[Dict[str, Any]]) -> None:

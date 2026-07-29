@@ -1,4 +1,5 @@
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -6,6 +7,7 @@ from src.domain.market_units_snapshot import (
     MarketUnitsSnapshotError,
     build_asset_key,
     create_units_snapshot,
+    ensure_units_snapshot,
     load_units_snapshot,
     load_market_units_csv,
     snapshot_path,
@@ -76,6 +78,95 @@ def test_snapshot_adoption_path_records_units_source(tmp_path):
     assert ledger.units_source.path == snapshot_path("2026-04-20", str(snapshot_dir))
     assert ledger.units_source.snapshot_target_date == "2026-04-20"
     assert ledger.assets[0].units == pytest.approx(20000)
+
+
+def test_ensure_snapshot_atomically_creates_and_reuses_immutable_file(tmp_path):
+    market_units_csv = tmp_path / "market_units.csv"
+    snapshot_dir = tmp_path / "current"
+    _write_market_units(market_units_csv)
+
+    path = ensure_units_snapshot(
+        "2026-04-20",
+        csv_path=str(market_units_csv),
+        snapshot_dir=str(snapshot_dir),
+    )
+    original = (snapshot_dir / "collection_units_20260420.json").read_bytes()
+    ledger = _ingester(tmp_path, market_units_csv, snapshot_dir).build_shadow_ledger(
+        "2026-04-20",
+        units_mode="strict",
+    )
+
+    assert ledger.units_source is not None
+    assert ledger.units_source.type == "SNAPSHOT"
+    assert ledger.assets[0].units == pytest.approx(20000)
+
+    _write_market_units(
+        market_units_csv,
+        rows=[
+            "name,asset_class,currency,units,source_symbol,audit_match_key,csv_url",
+            "FundB,MUTUAL_FUNDS,JPY,999,FundB,,https://example.com/b.csv",
+        ],
+    )
+    reused = ensure_units_snapshot(
+        "2026-04-20",
+        csv_path=str(market_units_csv),
+        snapshot_dir=str(snapshot_dir),
+    )
+
+    assert reused == path
+    assert (snapshot_dir / "collection_units_20260420.json").read_bytes() == original
+
+
+def test_ensure_snapshot_atomic_write_failure_leaves_no_target(tmp_path):
+    market_units_csv = tmp_path / "market_units.csv"
+    snapshot_dir = tmp_path / "current"
+    _write_market_units(market_units_csv)
+
+    with patch(
+        "src.domain.market_units_snapshot.atomic_write_json",
+        side_effect=OSError("disk full"),
+    ), pytest.raises(OSError, match="disk full"):
+        ensure_units_snapshot(
+            "2026-04-20",
+            csv_path=str(market_units_csv),
+            snapshot_dir=str(snapshot_dir),
+        )
+
+    assert not (snapshot_dir / "collection_units_20260420.json").exists()
+
+
+def test_ensure_snapshot_blocks_invalid_existing_file_without_overwrite(tmp_path):
+    market_units_csv = tmp_path / "market_units.csv"
+    snapshot_dir = tmp_path / "current"
+    snapshot_dir.mkdir()
+    _write_market_units(market_units_csv)
+    target = snapshot_dir / "collection_units_20260420.json"
+    target.write_text('{"schema_version":"wrong"}\n', encoding="utf-8")
+
+    with pytest.raises(MarketUnitsSnapshotError):
+        ensure_units_snapshot(
+            "2026-04-20",
+            csv_path=str(market_units_csv),
+            snapshot_dir=str(snapshot_dir),
+        )
+
+    assert target.read_text(encoding="utf-8") == '{"schema_version":"wrong"}\n'
+
+
+def test_ensure_snapshot_blocks_historical_creation_without_explicit_source(tmp_path):
+    market_units_csv = tmp_path / "market_units.csv"
+    snapshot_dir = tmp_path / "current"
+    _write_market_units(market_units_csv)
+
+    with pytest.raises(MarketUnitsSnapshotError, match="snapshot missing"):
+        ensure_units_snapshot(
+            "2026-04-20",
+            csv_path=str(market_units_csv),
+            snapshot_dir=str(snapshot_dir),
+            allow_create=False,
+        )
+
+    assert not (snapshot_dir / "collection_units_20260420.json").exists()
 
 
 def test_daily_mode_snapshot_missing_falls_back_to_live_csv(tmp_path):

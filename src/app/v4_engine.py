@@ -2,6 +2,7 @@ import os
 import json
 from datetime import date, datetime
 from typing import Any, Final
+from zoneinfo import ZoneInfo
 
 from src.app.notifier import Notifier
 from src.app.renderer.v4_content_renderer import V4ContentRenderer
@@ -11,6 +12,7 @@ from src.config.settings import DATA_DIR, LAST_SENT_FILE_CURRENT, LLM_PRIORITY_O
 from src.domain.daily_metrics import build_daily_metrics, build_deterministic_daily_context
 from src.domain.collection_history_updater import CollectionHistoryUpdater
 from src.domain.guard_rail import GuardRail
+from src.domain.market_units_snapshot import ensure_units_snapshot
 from src.domain.shadow_ledger_adapter import ShadowLedgerAdapter
 from src.domain.v4_ledger_finalizer import V4LedgerFinalizer
 from src.domain.universal_ingester import UniversalIngester
@@ -77,7 +79,7 @@ class V4PortfolioEngine:
             if manual_date:
                 target_date_str = self.__timeline.get_target_date(manual_date)
             else:
-                target_date_str = datetime.now().strftime("%Y-%m-%d")
+                target_date_str = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d")
             logger.info(f"[Guard] Launching V4 Engine v{VERSION} | Target: {target_date_str} | Scope: {scope}")
 
             if not self.__guard.should_proceed(
@@ -90,13 +92,19 @@ class V4PortfolioEngine:
                 logger.info("[Outcome] V4 execution inhibited by GuardRail")
                 return False
 
+            today_jst = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d")
+            ensure_units_snapshot(
+                target_date_str,
+                allow_create=target_date_str == today_jst,
+            )
+
             us_context = self.__timeline.get_us_market_context(target_date_str)
             trading_date = us_context.get("trading_date") or target_date_str
             self.__history_updater.refresh(
                 target_date=target_date_str,
                 us_market_date=trading_date,
             )
-            shadow_ledger = self.__ingester.run(target_date_str)
+            shadow_ledger = self.__ingester.run(target_date_str, units_mode="strict")
             finalized_ledger = self.__finalizer.finalize(shadow_ledger)
             finalized_ledger = self.__retry_incomplete_market_pricing(
                 target_date=target_date_str,
@@ -195,7 +203,7 @@ class V4PortfolioEngine:
             us_market_date=us_market_date,
             only_assets=target_names,
         )
-        retried_ledger = self.__ingester.run(target_date)
+        retried_ledger = self.__ingester.run(target_date, units_mode="strict")
         return self.__finalizer.finalize(retried_ledger)
 
     def __persist_finalized_shadow_ledger(self, shadow_ledger: Any) -> bool:

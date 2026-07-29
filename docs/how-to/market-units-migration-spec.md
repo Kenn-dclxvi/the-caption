@@ -230,12 +230,16 @@ build_shadow_ledger(target_date: Optional[str] = None, units_mode: str = "daily"
 
 ### 7.2 daily mode
 
-日次運用では可用性を優先する。
+通常の日次運用では、台帳計算より先に Units 入力を snapshot として固定する。
 
-1. 対象日の snapshot が存在し、検証に通れば snapshot を採用する。
-2. snapshot 欠損時は `market_units.csv` を採用する。
-3. snapshot 不正時は `[Guard]` warning を出し、`market_units.csv` へフォールバックする。
-4. フォールバックした場合も `units_source.type = "LIVE_CSV"` として記録する。
+1. JST の当日について snapshot がなければ、現在の `market_units.csv` から atomic write で生成する。
+2. 対象日の有効な snapshot が既にあれば、上書きせず不変入力として再利用する。
+3. snapshot の生成・保存・再読込検証に失敗した場合は blocking とする。
+4. snapshot が不正な場合も上書きや live CSV fallback を行わず blocking とする。
+5. 台帳計算は `strict` で snapshot を読み、`units_source.type = "SNAPSHOT"` を記録する。
+6. 明示した過去日付は JST 当日と区別し、既存の有効な snapshot がない限り通常日次経路を開始しない。
+
+この変更により、Market Units 入力の可用性より、確定台帳・`daily_metrics`・`market_snapshot`・メールの再現性を優先する。入力固定に失敗した実行は、これらの確定成果物を成功扱いにしない。
 
 ### 7.3 strict mode
 
@@ -278,12 +282,13 @@ build_shadow_ledger(target_date: Optional[str] = None, units_mode: str = "daily"
 
 候補:
 
-1. 現在の `data/collection/market_units.csv`
-2. 日付別に用意した手動 CSV
-3. Git 履歴またはバックアップから復元した CSV
-4. 初回導入日以降に日次処理で自動生成された snapshot
+1. 当日またはその時点で有効だったことを確認できる日付別 CSV
+2. Git 履歴またはバックアップから復元し、対象日へ一意にbindできる CSV
+3. 監査証跡から内容を一意に復元できる CSV
 
-現在の `market_units.csv` で過去期間を生成した場合、その snapshot は「現在の保有数を過去日付に固定したもの」であり、過去当時の保有数を保証しない。
+現在の `market_units.csv` を過去日付へ暗黙適用してはならない。入力を一意にbindできない日は、推測・補間せず unresolved とする。
+
+専用経路は `python -m src.app.entrypoints.market_units_backfill` とする。既定は dry-run であり、`--source YYYY-MM-DD=/path/to/history.csv` で日付ごとの入力を明示し、`--apply` を付けた場合だけ欠落 snapshot を生成する。この経路は既存 snapshot を上書きせず、メール送信、CompletionLock、`daily_metrics`、`market_snapshot`、台帳を更新しない。
 
 ### 9.3 再現性の保証範囲
 
@@ -310,7 +315,7 @@ build_shadow_ledger(target_date: Optional[str] = None, units_mode: str = "daily"
    - `source.ssot_a_path = "data/collection/market_units.csv"`
    - 新規生成 ledger の `ssot_a_path = "data/collection/market_units.csv"`
    - 新規生成 ledger の `units_source` に実入力元を記録する
-3. スナップショット再生成時は同一日付キーの既存ファイルを上書きする。
+3. 有効な既存 snapshot は不変として再利用し、同一日付キーを上書きしない。
 
 `data/v4_shadow_ledger.json` は current canonical output として扱う。補正はパス文字列だけの直接編集ではなく、代表日で ledger を再生成して確認することを基本とする。既存 ledger 履歴の金額完全再計算は対象外とする。
 
@@ -375,9 +380,11 @@ build_shadow_ledger(target_date: Optional[str] = None, units_mode: str = "daily"
 
 ### 14.2 日次実行
 
-1. snapshot 存在時は snapshot Units を採用する。
-2. snapshot 欠損・不正時は warning を出し、live CSV で処理完走する。
-3. ledger には `ssot_a_path` と `units_source` がそれぞれ正しい意味で記録される。
+1. JST 当日の初回実行は snapshot を atomic 生成し、その snapshot Units を同じ台帳計算で採用する。
+2. 同日再実行は有効な snapshot を上書きせず再利用する。
+3. snapshot 保存失敗または不正時は、確定台帳、`daily_metrics`、`market_snapshot`、メール送信、CompletionLock更新へ進まない。
+4. 明示した過去日付は、有効な既存 snapshot なしに現在の CSV へフォールバックしない。
+5. ledger には `ssot_a_path` と `units_source` がそれぞれ正しい意味で記録される。
 
 ### 14.3 再計算・監査
 
@@ -399,8 +406,12 @@ build_shadow_ledger(target_date: Optional[str] = None, units_mode: str = "daily"
 
 1. Unit テスト:
    - snapshot 採用パス
-   - daily mode の snapshot 欠損 fallback
-   - daily mode の snapshot 不正 fallback
+   - daily mode の snapshot atomic 生成と同一計算での採用
+   - daily mode の有効 snapshot 再利用
+   - snapshot 保存失敗時の後続停止
+   - daily mode の不正 snapshot blocking
+   - 明示過去日付の live CSV fallback 禁止
+   - 専用バックフィル経路の副作用隔離
    - strict mode の snapshot 不正 blocking
    - `asset_key` 生成・重複判定
    - `units_source` 記録

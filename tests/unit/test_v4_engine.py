@@ -152,6 +152,7 @@ def harness(tmp_path):
          patch("src.app.v4_engine.MailSender") as MockSender, \
          patch("src.app.v4_engine.MarketDataFetcher") as MockMarketFetcher, \
          patch("src.app.v4_engine.MarketSnapshotRepository") as MockMarketSnapshotRepo, \
+         patch("src.app.v4_engine.ensure_units_snapshot") as MockEnsureUnitsSnapshot, \
          patch("src.app.v4_engine.SystemUtils") as MockUtils:
 
         timeline = MockTimeline.return_value
@@ -223,6 +224,7 @@ def harness(tmp_path):
                 "sender": sender,
                 "market_fetcher": market_fetcher,
                 "market_snapshot_repo": market_snapshot_repo,
+                "ensure_units_snapshot": MockEnsureUnitsSnapshot,
                 "utils": MockUtils,
                 "shadow_output": isolated_shadow_path,
                 "appraisal_state": isolated_appraisal_path,
@@ -238,7 +240,8 @@ def test_v4_engine_dispatches_from_universal_ingester(harness):
         target_date="2026-04-25",
         us_market_date="2026-04-24",
     )
-    mocks["ingester"].run.assert_called_once_with("2026-04-25")
+    mocks["ensure_units_snapshot"].assert_called_once_with("2026-04-25", allow_create=False)
+    mocks["ingester"].run.assert_called_once_with("2026-04-25", units_mode="strict")
     mocks["daily_metrics_repo"].save.assert_called_once()
     saved_metrics = mocks["daily_metrics_repo"].save.call_args[0][0]
     assert saved_metrics["schema_version"] == "v4.1-daily-metrics"
@@ -361,7 +364,8 @@ def test_v4_engine_uses_today_when_target_date_is_omitted(harness):
         target_date="2026-04-27",
         us_market_date="2026-04-24",
     )
-    mocks["ingester"].run.assert_called_once_with("2026-04-27")
+    mocks["ensure_units_snapshot"].assert_called_once_with("2026-04-27", allow_create=True)
+    mocks["ingester"].run.assert_called_once_with("2026-04-27", units_mode="strict")
     mocks["sender"].send.assert_called_once_with("CAPTION [2026-04-27]", "<html>v4</html>")
 
 
@@ -462,6 +466,20 @@ def test_ingester_failure_prevents_dispatch_and_completion_lock(harness):
 
     assert engine.run(target_date="2026-04-25") is False
 
+    mocks["sender"].send.assert_not_called()
+    mocks["utils"].set_flag.assert_not_called()
+
+
+def test_snapshot_persistence_failure_stops_all_final_outputs_and_dispatch(harness):
+    engine, mocks = harness
+    mocks["ensure_units_snapshot"].side_effect = OSError("disk full")
+
+    assert engine.run(target_date="2026-04-25") is False
+
+    mocks["history_updater"].refresh.assert_not_called()
+    mocks["ingester"].run.assert_not_called()
+    mocks["daily_metrics_repo"].save.assert_not_called()
+    mocks["market_snapshot_repo"].save.assert_not_called()
     mocks["sender"].send.assert_not_called()
     mocks["utils"].set_flag.assert_not_called()
 

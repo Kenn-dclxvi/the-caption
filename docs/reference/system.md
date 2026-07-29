@@ -302,7 +302,7 @@ v4 日次では `ShadowLedger` を生成後に確定判定へ回し、メール�
 | `jp_market_date` | string \| null | `target_date` 以前の直近JPX現物市場取引日。日次Ingesterが実行単位で一度だけ解決する。 |
 | `assets` | array | `ShadowAssetRecord` のフラット配列 |
 
-SSOT A の正本は `data/collection/market_units.csv` であり、runtime は旧 `data/collection/funds.csv` へ自動フォールバックしない。日付別固定入力は `data/current/collection_units_YYYYMMDD.json` に `schema_version = market_units_snapshot.v1` / `snapshot_type = FULL_SNAPSHOT` として保存する。`daily` mode は snapshot 欠損・不正時に warning を出して live CSV へ fallback し、`strict` mode は不正 snapshot を blocking とし、欠損時は明示許可がある場合のみ live CSV を採用する。
+SSOT A の正本は `data/collection/market_units.csv` であり、runtime は旧 `data/collection/funds.csv` へ自動フォールバックしない。日付別固定入力は `data/current/collection_units_YYYYMMDD.json` に `schema_version = market_units_snapshot.v1` / `snapshot_type = FULL_SNAPSHOT` として保存する。JST 当日の通常日次は台帳計算前に snapshot を atomic 生成し、有効な既存 snapshot は上書きせず再利用する。保存・検証失敗または不正 snapshot は blocking とし、確定台帳、`daily_metrics`、`market_snapshot`、メール、CompletionLockへ進まない。明示した過去日付は既存の有効な snapshot を必須とし、現在の live CSV へ暗黙フォールバックしない。証拠のある過去入力だけを `market_units_backfill` 専用経路で固定し、この経路は他の確定成果物や送信状態を変更しない。
 
 `ShadowAssetRecord` の `source` は `MARKET_UNITS` または `ABSOLUTE_AMOUNT` である。`MARKET_UNITS` は `units * price * fx_rate` を基本式とし、投資信託は `NAV / 10000 * units`、コモディティはオンス建て価格をグラム単価へ換算する。`ABSOLUTE_AMOUNT` は `amount` をそのまま `current_value_jpy` とする。市場資産には `diff_pct`, `wtd_pct`, `mtd_pct`, `ytd_pct` が保存される（絶対額資産は `null`）。
 
