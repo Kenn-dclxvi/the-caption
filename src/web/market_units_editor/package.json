@@ -14,7 +14,7 @@
     "@vitejs/plugin-react": "^5.0.4",
     "csv-parser": "^3.2.0",
     "express": "^5.1.0",
-    "lucide-react": "^0.546.0",
+    "lucide-react": "^1.27.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "vite": "^7.1.7"
