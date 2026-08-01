@@ -82,7 +82,7 @@ openai==2.24.0
     # via -r requirements.in
 packaging==26.0
     # via pytest
-pandas==3.0.1
+pandas==3.0.5
     # via
     #   -r requirements.in
     #   exchange-calendars
