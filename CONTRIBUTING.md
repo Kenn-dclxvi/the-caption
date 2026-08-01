@@ -36,7 +36,6 @@ cp .env.example .env   # 値を埋める
 
 ```bash
 .venv/bin/pytest
-.venv/bin/mypy src
 ```
 
 ## 規約ドキュメント
