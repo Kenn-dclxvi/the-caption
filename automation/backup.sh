@@ -1,16 +1,17 @@
 #!/bin/bash
 
-DEST_DIR="$HOME/Library/Mobile Documents/com~apple~CloudDocs/THE-CAPTION-DATA_LOG/"
+# 環境に合わせて設定する（未設定なら iCloud Drive 配下を既定とする）
+DEST_DIR="${THE_CAPTION_BACKUP_DIR:-$HOME/Library/Mobile Documents/com~apple~CloudDocs/THE-CAPTION-DATA_LOG/}"
 DATE_STAMP=$(date +%Y%m%d)
 
 case "$1" in
     prd)
-        BASE_SRC="$HOME/repos/the-caption"
+        BASE_SRC="${THE_CAPTION_PRD_DIR:-$HOME/repos/the-caption}"
         PREFIX=""
         EXEC_ARCHIVE=1
         ;;
     dev)
-        BASE_SRC="$HOME/repos/the-caption-dev"
+        BASE_SRC="${THE_CAPTION_DEV_DIR:-$HOME/repos/the-caption-dev}"
         PREFIX="dev_"
         EXEC_ARCHIVE=0
         ;;

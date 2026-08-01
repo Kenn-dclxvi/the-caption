@@ -8,7 +8,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>$HOME/repos/the-caption-dev/automation/backup.sh</string>
+        <string>__REPO_ROOT__/automation/backup.sh</string>
         <string>dev</string>
     </array>
 

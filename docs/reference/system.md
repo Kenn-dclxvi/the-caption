@@ -441,44 +441,32 @@ src/config/settings.py で定義され、コード内で参照される定数。
 
 ## 4. Automation Source Codes (自動化スクリプト)
 
-### 4.1 backup_data.sh
+実体は `automation/` 配下にある。環境依存のパスはすべて環境変数またはプレースホルダで外出しされており、そのままでは動作しない。利用時は自環境の値を与えること。
+
+### 4.1 automation/backup.sh
+
+`logs/` と `data/` を退避先へコピーする。引数は `prd` / `dev`。
+
+| 環境変数 | 既定値 | 用途 |
+| :--- | :--- | :--- |
+| `THE_CAPTION_BACKUP_DIR` | `$HOME/Library/Mobile Documents/com~apple~CloudDocs/THE-CAPTION-DATA_LOG/` | 退避先 |
+| `THE_CAPTION_PRD_DIR` | `$HOME/repos/the-caption` | 本番リポジトリのパス |
+| `THE_CAPTION_DEV_DIR` | `$HOME/repos/the-caption-dev` | 開発リポジトリのパス |
+
 ```bash
-#!/bin/bash
-# 環境に合わせて以下の変数を設定してください
-PROJECT_DIR="${HOME}/THE-CAPTION"
-ICLOUD_DEST_DIR="${HOME}/Library/Mobile Documents/com~apple~CloudDocs/THE-CAPTION-DATA_LOG/"
-
-SRC_LOG_DIR="${PROJECT_DIR}/logs"
-cp "${SRC_LOG_DIR}/finance_report.log" "${ICLOUD_DEST_DIR}/finance_report_$(date +%Y%m%d).log"
-cp "${SRC_LOG_DIR}/llm_trace.log" "${ICLOUD_DEST_DIR}/llm_trace_$(date +%Y%m%d).log"
-cp "${SRC_LOG_DIR}/cron_panic.log" "${ICLOUD_DEST_DIR}/cron_panic_$(date +%Y%m%d).log"
-cd "${PROJECT_DIR}" && tar cvzf data.tar.gz data
-cp "${PROJECT_DIR}/data.tar.gz" "${ICLOUD_DEST_DIR}/data_$(date +%Y%m%d).tar.gz"
+./automation/backup.sh prd
 ```
 
-### 4.2 com.<username>.thecaption.datacopy.plist
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "[http://www.apple.com/DTDs/PropertyList-1.0.dtd](http://www.apple.com/DTDs/PropertyList-1.0.dtd)">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.<username>.thecaption.datacopy</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/bin/bash</string>
-        <string>/bin/bash ${HOME}/THE-CAPTION/automation/backup_data.sh</string>
-    </array>
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>9</integer>
-        <key>Minute</key>
-        <integer>15</integer>
-    </dict>
-</dict>
-</plist>
-```
+`prd` では退避先の既存ファイルを `Archive/` へ移してから世代を作る。`dev` ではアーカイブ処理を行わず、ファイル名に `dev_` を前置する。
+
+### 4.2 automation/com.example.thecaption.*.plist.template
+
+launchd 定義のテンプレート。`__REPO_ROOT__` を自環境の絶対パスへ置換し、`Label` と `StandardOutPath` / `StandardErrorPath` を自分の識別子へ変えたうえで `~/Library/LaunchAgents/` に配置して `launchctl load` する。
+
+| ファイル | 対象 | 実行時刻 |
+| :--- | :--- | :--- |
+| `com.example.thecaption.datacopy.plist.template` | `backup.sh prd` | 20:05 |
+| `com.example.thecaption.dev.datacopy.plist.template` | `backup.sh dev` | テンプレート記載のとおり |
 
 ---
 

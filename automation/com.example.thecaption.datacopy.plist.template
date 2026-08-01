@@ -8,7 +8,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string><repo-root>/automation/backup.sh</string>
+        <string>__REPO_ROOT__/automation/backup.sh</string>
         <string>prd</string>
     </array>
 
