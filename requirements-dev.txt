@@ -112,7 +112,7 @@ pygments==2.19.2
     # via pytest
 pyluach==2.3.0
     # via exchange-calendars
-pytest==9.0.2
+pytest==9.1.1
     # via
     #   -r requirements-dev.in
     #   pytest-cov
