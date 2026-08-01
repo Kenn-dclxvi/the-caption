@@ -7,6 +7,17 @@
 
 THE CAPTION は、資産の動きを「美術館のキャプション」のような静謐なレポートへと変換するアーカイブシステムです。感情を排した「論理の静寂」の中で、数値の裏側にある因果を AI が鑑定し、知的で落ち着いた資産管理体験を提供します。
 
+同時に本リポジトリは、[orchestration-prompt](https://github.com/Kenn-dclxvi/orchestration-prompt) の実行制御を適用した **AI駆動開発（Director-Led AI Development）の実証リポジトリ**でもあります。実装の大半は AI エージェントが [AGENTS.md](./AGENTS.md) の規約に従って生成しており、設計判断は [docs/adr/](./docs/adr/) に記録されています。
+
+---
+
+## ⚠️ 公開版について
+
+- **実データは一切含まれません。** 保有資産（`data/`）、実行ログ（`logs/`）、資格情報（`.env` / `secret.key`）はすべて `.gitignore` 済みです
+- **特定金融機関へのログイン自動化・スクレイピング実装は公開範囲に含めていません。** 該当層は監査系として設計されていましたが（[ADR-0001](./docs/adr/ADR-0001-trinity-separation.md)）、v4 の主系である Collection-Primary は当該実装に依存しません
+- 本ソフトウェアは**投資助言を行うものではありません**。生成されるレポートは LLM による記述であり、正確性は保証されません
+- セルフホストする場合は [SECURITY.md](./SECURITY.md) を先に読んでください
+
 ---
 
 ## 📚 Documentation Map (Diátaxis)
