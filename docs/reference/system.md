@@ -5,7 +5,6 @@
 ### 0.1 v4.2 Refactoring
 * v4日次の取得・鮮度判定・再取得ロジックを整理し、アセットクラス別の価格基準日（JP株=`target_date`、US株/コモディティ/FX=`us_market_date`）を統一した。
 * USD建て資産・コモディティの評価で FX 基準日を鮮度判定へ統合し、為替遅延を `STALE` として扱う。
-* v3以前のコードは `legacy/v3/` へ退避し、旧運用記録は `docs/archive/` で参照管理する形に整理した。
 
 ## 1. System Specifications (システム要件)
 
@@ -15,7 +14,7 @@
   - `data/collection/market_units.csv`: 市場価格で評価する資産の保有数 (`units`) を正典とする。
   - `data/external_assets.json`: 現金・外部資産の絶対額 (`amount`) を正典とする。
 * **Canonical Ledger**: `src/domain/universal_ingester.py` が両SSOTを統合し、`data/v4_shadow_ledger.json` を生成する。v4日次パイプラインではこの `ShadowLedger` を正規入力として扱う。
-* **Broker Audit**: Broker スクレイピングは必須データ取得ではなく、`legacy/v3/src/app/broker_auditor.py` による比較監査へ降格する。Broker が到達不能でも配信は止めず、`[AUDIT]` Warning として記録する。
+* **External Audit**: 証券会社サイトからの取得は必須データではなく比較監査へ降格した。到達不能でも配信は止めず `[AUDIT]` Warning として記録する。**本公開リポジトリは取得層の実装を含まない。**
 * **Monolithic Daily Mail**: `src/app/renderer/v4_content_renderer.py` が `ShadowLedger`、確定論的な日次コンテキスト、v3由来の Summary/Position 表示メトリクスを単一HTMLメールへ統合する。日次AI鑑定は廃止済みであり、常に確定論的コンテキストを使う（`-u` で既存キャッシュを再利用する場合を除く）。
 * **Daily Monthly Inputs**: v4日次は `data/current/daily_metrics_YYYYMMDD.json` と `data/current/market_snapshot_YYYYMMDD.json` を保存する。月次AIは `daily_metrics` と `market_snapshot` の両方を統合入力として使用し、market snapshot は `market_summary` 原文と主要指数・米10年債・USD/JPY・VIXの構造化観測値を併せて渡す（`PROMPT_CHRONICLE_SYSTEM_V4` の `<input_contract>` 参照）。
 * **V4 Monthly Chronicle**: `MonthlyCurator.generate_v4_chronicle()` が月内の `ShadowLedger` 推移、`daily_metrics`、`market_snapshot`、必要最小限の Knowledge Base を統合し、`MARKET_UNITS` と `ABSOLUTE_AMOUNT` の因果境界を保った月次総括を生成する。`daily_metrics` が15件未満の月は既存の月次Chronicleへフォールバックする。返却値はJSON Schema形の `OUTPUT_SCHEMA_CHRONICLE_V4` に基づき、トップレベル、必須フィールド、基本型を実行時に検証する。schema violation と banned words violation は `MonthlyEngine.run()` の alert code で `V4_SCHEMA_VIOLATION_MONTHLY` / `V4_BANNED_WORD_MONTHLY` に分離する。
@@ -27,62 +26,12 @@
 * **Sovereign Ledger**: ユーザーが確定させた保有数量を記録する新しいデータ基盤。 従来の history.csv の「結果記録」から「根拠記録」へと転換する。
 
 ### 1.3 Requirements V1 (Legacy Baseline)
-***[REQ-F-001] 証券会社データ取得 (Trinity Separation 適用)***:
-Broker 証券サイトからデータを取得する責務を以下の3層に分離し、各責務を厳格に隔離した構造を採用。
 
-#### **Layer 1: Infrastructure - BrowserManager**
-- **責務**: ブラウザプロセス管理・Playwright セッション・Cookie 永続化
-- **実装内容**:
-  -Python subprocess.Popen によるブラウザプロセス起動・終了
-  -Playwright の CDP(Chrome DevTools Protocol) 接続
-  -Session State (storage_state) の読み書き
-  -プラットフォーム別プロセス強制終了 (taskkill / SIGKILL)
-- **ドメイン知識**: **なし**（セレクタ、URL、ログイン概念を含まない）
+***[REQ-F-001] 証券会社サイトからのデータ取得 (Trinity Separation 適用)***:
+ブラウザ基盤（Infra）/ サイト固有操作（Domain Logic）/ Facade の3層に責務を分離する設計を採用していた。
+詳細は [ADR-0001](../adr/ADR-0001-trinity-separation.md) を参照。**本公開リポジトリはこの取得層の実装を含まない。**
 
-#### **Layer 2: Domain Logic - BrokerOperator**
-- **責務**: Broker 証券サイト固有の操作ロジック
-- **実装内容**:
-  - ログインフロー（ID/パスワード入力、MFA対応）
-  - CSV ダウンロード操作
-  - ページ状態検証（セレクタ定義の集約）
-- **セレクタ定義の集約**:
-  - __SELECTOR_LOGIN_ID = "input[name='loginid']"
-  - __SELECTOR_PASSWORD = "input[name='passwd']"
-  - __SELECTOR_OTP_INPUT = "input[name='otp'], input[type='tel']"
-  - __SELECTOR_CSV_BTN_TEXT = "CSV" など、すべて定数として管理
-- **ブラウザ基盤への依存**: BrowserManager を外部から注入（Dependency Injection）
-
-#### **Layer 3: Facade - BrokerClient**
-- **責務**: BrowserManager と BrokerOperator の統率
- -**公開インターフェース**:
-  - open_session(headless: bool) -> Tuple[bool, BrokerError]
-  - download_csv(url_hash: str, save_path: str, tab_selector: Optional[str]) -> Tuple[bool, BrokerError]
-  - close_session() -> None
-- **互換性**: 既存の呼び出し元（Engine等）に対する**完全な下位互換性**を保証
-- **エラーコード伝播**: BrokerOperator が返すエラーコードを呼び出し元に伝播させ、プログラマティックな判定を可能に
-
-#### *エラーハンドリング統一 
-- 全層共通**すべての主要メソッドは Tuple[bool, BrokerError] を返却し、呼び出し元がプログラマティックな判定を可能にする：
-**BrokerClient のエラーコード一覧**:
-- NONE : 成功
-- BROWSER_OPEN_FAILURE : ブラウザプロセス起動失敗
-- BROWSER_CONNECTION_FAILURE : Playwright CDP 接続失敗
-- AUTH_FAILURE : 認証失敗
-- SESSION_INVALID : セッション無効
-- SESSION_INVALID_FINAL : セッション復旧不可
-- SESSION_NOT_OPEN : セッション未起動
-- NAV_FAILURE : ナビゲーション失敗
-- SELECTOR_TIMEOUT : 要素検出タイムアウト
-- TAB_SELECTOR_TIMEOUT : タブ切替要素検出タイムアウト
-- CSV_BTN_TIMEOUT : CSVボタン検出タイムアウト
-- DOWNLOAD_FAILED : ダウンロード失敗
-- MFA_FAILURE : 多要素認証失敗
-- POST_LOGIN_NAV_FAILURE : ログイン後遷移失敗
-- UNEXPECTED_ERROR : 予期しないエラー
-
----
-
-* **[REQ-F-002] MFA（多要素認証）自動突破**: Gmail API（IMAP）と連携し、認証時に送信されるワンタイムパスワードを自動的に抽出・入力すること。（実装: BrokerOperator.__handle_mfa() で GmailOTP クラスを統合）
+* **[REQ-F-002] MFA（多要素認証）自動突破**: メール経由のワンタイムパスワードを自動抽出・入力する。**本公開リポジトリには含まない。**
 * **[REQ-N-001] Slide Guard（データ整合性担保)**:米国株や投資信託の前日比が「0.00%（未確定）」の状態ではレポート配信を自律的に抑制すること。
 * **[REQ-N-003] 物理的なプロセス強制終了 (SIGKILL)**:Playwright の終了シーケンスに依存せず、データの永続化完了後に OS レベルでプロセスを断罪することで、リソースの占有とハングを物理的に回避すること。（実装: BrowserManager.__terminate_browser_process() で platform 別に実装。Unix: `os.killpg(os.getpgid(pid), SIGKILL)` でプロセスグループごと終了し Chrome 子プロセスのゾンビ化を防止。fallback: `os.kill(pid, SIGKILL)`）
 
@@ -95,14 +44,10 @@ Broker 証券サイトからデータを取得する責務を以下の3層に分
 
 | 変数名 | 必須 | 用途 | 秘匿性 |
 | :--- | :--- | :--- | :--- |
-|**BROKER_ID** |YES |証券会社 ログインID |**極高** |
-|**BROKER_PASS** |YES |証券会社 ログインパスワード |**極高** |
 |**ANTHROPIC_API_KEY** |YES |Claude API (Primary LLM Provider) |**極高** |
 |**GOOGLE_API_KEY** |OPT |Gemini API (Secondary LLM Provider) |**高** |
 |**DEEPSEEK_API_KEY** |OPT |DeepSeek API (Emergency Backup) |**高** |
 |**ALPHA_VANTAGE_API_KEY** |OPT |Alpha Vantage 日足 API（US_STOCK の expected date Close 欠落時のみ optional fallback） |**高** |
-|**IMAP_USER** |YES |IMAP ログインユーザー |**高** |
-|**IMAP_PASS** |YES |IMAP ログインパスワード (アプリパスワード) |**極高** |
 |**SMTP_USER** |YES |送信元 Gmail アドレス |**高** |
 |**SMTP_PASS** |YES |送信元 Gmail のアプリパスワード |**極高** |
 |**SMTP_TO** |YES |レポート受取先メールアドレス |**高** |
@@ -124,7 +69,7 @@ Broker 証券サイトからデータを取得する責務を以下の3層に分
 * **`--test-context`**: **[Test Context]** 互換引数。v4標準のAI生成経路は通常実行で扱う。
 * **`--test-market`**: **[Market Data Test]** `MarketDataFetcher` のスタンドアロン動作確認。v4エンジン本体は起動しない。
 
-`python -m src.app.entrypoints.daily_main` は `legacy/v3/` へ退避済みであり、現行 src/ には存在しない。
+`python -m src.app.entrypoints.daily_main` は本リポジトリに存在しない（v3 主系は公開範囲外）。
 
 `python -m src.app.entrypoints.weekly_main` の実行時引数。
 
@@ -140,7 +85,7 @@ Broker 証券サイトからデータを取得する責務を以下の3層に分
 * **`-u, --use-cache`**: **[Reuse Context]** 既存の AI による月次総括結果 (chronicle_YYYYMM.json) があれば、 AI プロバイダへの問い合わせをスキップして再利用する。
 * **`-t, --format-test`**: **[Format Test]** レンダリングテストを実行する。HTML を `reports/monthly_format_test.html` に保存し、メール送信はスキップする。
 
-`python -m src.app.entrypoints.collection_main` は `legacy/v3/` へ退避済みであり、現行 src/ には存在しない。
+`python -m src.app.entrypoints.collection_main` は本リポジトリに存在しない（v3 主系は公開範囲外）。
 
 `./run.sh collection-web-prd` / `./run.sh collection-web-dev` の実行時挙動。
 
@@ -220,7 +165,7 @@ project_root/
         └── shadow_ledger_adapter.py
 ```
 
-旧 Broker 主系のデータは「累積マスターCSV (Archive)」と「日次JSON元帳 (Current)」の2層構造で維持される。
+旧主系のデータは「累積マスターCSV (Archive)」と「日次JSON元帳 (Current)」の2層構造で維持される。
 ```text
 project_root/
 ├── data/
@@ -270,20 +215,7 @@ project_root/
 |**STAGNANT** |CSV総額 == 資産合計 <br> AND <br> 前日差分 < 100円 |**停滞データ (鮮度落ち)**。<br>計算は合うが、主要資産が前日から微動だにしていない状態。 |
 |**ADJUSTED** |CSV総額 != 資産合計 |**自動調整データ**。<br>差額を UNKNOWN 資産として注入し、強制的にバランスさせた状態。 |
 
-### 3.3 Source URL Reference
-Broker View ベースURL: https://broker.example.com/view/index.html#
-
-| Logical Name | Asset Class | URL Hash | Note |
-| :--- | :--- | :--- | :--- |
-|history_total.csv |全体/サマリー |#DAILY.GOODS.ALL |デフォルト表示 |
-|history_transfer.csv |入出金推移 |#DAILY.GOODS.ALL |要タブ切替: button[data-auxiliary='InOutCash'] |
-|mutual.csv |投資信託 |#DAILY.GOODS.ALL.3001 | |
-|us_stock.csv |米国株式 |#DAILY.GOODS.ALL.4001 | |
-|jp_stock.csv |日本株式 |#DAILY.GOODS.ALL.1001 | |
-|commodity.csv |商品先物 |#DAILY.GOODS.ALL.10001 | |
-|short_term.csv |短期金融資産 |#DAILY.GOODS.ALL.9001 | |
-
-### 3.4 Shadow Ledger Definition (v4 Canonical Ledger)
+### 3.3 Shadow Ledger Definition (v4 Canonical Ledger)
 
 `ShadowLedger` は `src/domain/ledger_schema.py` で定義される v4.3 の評価結果モデルである。すべての資産は `assets: List[ShadowAssetRecord]` にフラットに格納され、`total_value_jpy` は各 `current_value_jpy` の合計と一致しなければならない。
 v4 日次では `ShadowLedger` を生成後に確定判定へ回し、メール描画には確定処理済みの `ShadowLedger` を使う。
@@ -327,7 +259,7 @@ v4 日次の基準は `target_date` である。米国株・コモディティ�
 
 現行 `DAY` は直近米国セッションの原資産騰落率であり、同じ `trading_date` を参照する複数の `target_date` で繰り返し得る。また、FX も同じ `trading_date` に固定し、純粋な FX 寄与を `DAY` に含めない。採用理由、観測値、既知の制約、将来案は [ADR-0005](../adr/ADR-0005-target-date-us-market-date.md) を正とする。
 
-### 3.4.1 Total Period Return Definition (v4 Mail Display)
+### 3.3.1 Total Period Return Definition (v4 Mail Display)
 
 v4 メールの全体 `WTD` / `MTD` / `YTD` は、`ShadowLedgerAdapter` が市場資産ごとの期間収益率を期間開始時点相当額で加重平均する。現在評価額を `V_i`、個別期間収益率を小数表記で `r_i` とすると、加重額は `B_i = V_i / (1 + r_i)`、全体値は `Σ(B_i × r_i) / ΣB_i` とする。
 
@@ -335,7 +267,7 @@ v4 メールの全体 `WTD` / `MTD` / `YTD` は、`ShadowLedgerAdapter` が市�
 
 計算式は新規生成分へ前方適用し、送信済みメール、過去台帳、既存 `daily_metrics` は再生成しない。全日分の保有数量スナップショットがない状態での一括再生成は、現在数量を過去へ誤適用するためである。この定義は米国市場日付、終値確定、FX鮮度の仕様を変更しない。
 
-### 3.4.2 Daily Metrics Definition (v4 Monthly Input)
+### 3.3.2 Daily Metrics Definition (v4 Monthly Input)
 
 `daily_metrics_YYYYMMDD.json` は `ShadowLedger` から確定論的に生成される月次集約用データである。AIによる主因断定や文章生成は含めない。
 メール用の `DAY` は確定済み台帳から導出する。`YTD` / `MTD` / `WTD` は既存の台帳メトリクスを引き続き利用する。
@@ -354,8 +286,8 @@ v4 メールの全体 `WTD` / `MTD` / `YTD` は、`ShadowLedgerAdapter` が市�
 | `top_movers` | `diff_val_jpy` が取れる資産の評価額寄与上位 |
 | `data_quality` | 資産有無、正の合計、価格欠損有無 |
 
-### 3.5 External Assets Definition (外部資産定義)
-証券口座外で保有する資産（現金、銀行預金、企業型DC等）は /data/external_assets.json で管理される。v4.3 では Broker 側の現金残高もこのファイルの `CASH` / `CASH_EXTERNAL` 系カテゴリとして管理できる。
+### 3.4 External Assets Definition (外部資産定義)
+証券口座外で保有する資産（現金、銀行預金、企業型DC等）は /data/external_assets.json で管理される。v4.3 では証券口座内の現金残高もこのファイルの `CASH` / `CASH_EXTERNAL` 系カテゴリとして管理できる。
 対象日の年月（YYYY-MM）キーが優先され、存在しない場合は `default` キーに自律的にフォールバックする履歴管理構造を持つ。
 **File Location**: data/external_assets.json
 **Schema**:
@@ -397,45 +329,13 @@ v4 メールの全体 `WTD` / `MTD` / `YTD` は、`ShadowLedgerAdapter` が市�
 * v4.3 では対象月 `YYYY-MM` キーを優先し、存在しない場合は `default` にフォールバックする。
 * `items` 配列以外の形は安全に空配列へ正規化する。
 * 各 `amount` は市場価格を掛けず、そのまま `ShadowAssetRecord.current_value_jpy` にマッピングする。
-* 旧 Broker 主系では外部資産の合計額は `LedgerSummary.iron_bank_jpy` に加算される。
+* 旧主系では外部資産の合計額は `LedgerSummary.iron_bank_jpy` に加算される。
 
 ---
 
-## 3.6 Data Source Behavior (データソース挙動)
+## 3.5 LLM Provider Configuration (AI プロバイダ設定)
 
-### 3.6.1 Broker CSV Update Timing (更新タイミング解析)
-v4.3 では Broker CSV は監査用データソースであり、日次配信の必須入力ではない。以下の更新タイミング解析は、旧主系の運用・監査差分の理解・ロールバック時の参考情報として維持する。
-**公式情報**:
-証券会社の公式見解では「毎営業日翌日の8:50までにデータ更新完了」とされている。
-
->原則、毎営業日翌日の8:50までにはデータの更新が完了します。 リスク、リターンは年1回程度、MARKET VIEWは月1回程度の見直しを行います。 各投資信託の資産配分比率は投資信託の運用方針により、年1回程度の見直しと月1回程度の見直しを行います。 なお、投資信託の資産配分は、各銘柄の組入れ資産がそれほど変化しないため、BROKER VISIONにおける資産配分も変化しないケースが多くなると予想されます。
->
->出典: https://broker.example.com/faq
-
-**実測に基づく詳細挙動** (2026-02-04時点):
-取得するCSVデータの更新タイミングはブラックボックスであり、以下は独自解析した結果である。
-
-| 時刻 (JST) | 更新内容 | 備考 |
-|:-----------|:---------|:-----|
-|**06:00～08:00** |米国株・投資信託の確定日データ追加 |前日の米国市場終値が反映される |
-|**09:00** |日本市場の営業開始 |当日のデータ行が追加される |
-|**09:00～08:50** |過去データの再計算・更新 |前日データが微調整される（-1円等） |
-|**翌営業日 08:50** |最終確定 |すべてのデータが確定状態になる |
-
-**観測された挙動パターン**:
-- 米国株および投資信託は確定日の翌朝に更新される（6:00～8:00追加が多い）
-- 9:00の日本市場の営業開始からその営業日のデータが追加、更新される（9:00追加が多い）
-- その際に前日のデータをそのままスライドしているデータがある（米国株、投資信託）
-- 評価額が -1円 など微細な変化があるが、これは翌営業日 08:50までに更新される
-- 翌営業日のデータが追加でも過去のデータは更新される場合がある
-**特殊ケース**:
-- **購入初日**: 評価額が反映され、評価額前日比(%)は --- になる
-- **未購入アセット**: 評価額0、評価額前日比(円)0、評価額前日比(%)は ---、評価損益(円)0、評価損益(%)は --- になる
-- **短期金融資産**: 評価損益(円)、評価損益(%)は常に 0
-
-## 3.7 LLM Provider Configuration (AI プロバイダ設定)
-
-### 3.7.1 Multi-Provider Failover Architecture
+### 3.5.1 Multi-Provider Failover Architecture
 
 システムは複数の LLM プロバイダに対応し、Primary が失敗した場合に自動的にフェイルオーバーします。
 
@@ -467,7 +367,7 @@ LLM_CONFIG = {
 LLM_PRIORITY_ORDER = ["claude", "google"]
 ```
 
-### 3.7.2 Provider Comparison
+### 3.5.2 Provider Comparison
 
 | Provider | モデル | レート制限 | 入力コスト(1M tokens) | 出力コスト(1M tokens) | 品質 | 備考 |
 |:---------|:-------|:-----------|:-----------|:-----------|:-----|:-----|
@@ -477,7 +377,7 @@ LLM_PRIORITY_ORDER = ["claude", "google"]
 
 **推奨構成**: Claude を Primary、Google を Secondary として運用。
 
-### 3.7.3 Estimated Monthly Cost
+### 3.5.3 Estimated Monthly Cost
 
 **1日1回の Context レポート生成**（通常運用）:
 - 入力: 約 2,000 tokens → $0.006
@@ -487,7 +387,7 @@ LLM_PRIORITY_ORDER = ["claude", "google"]
 
 **比較**: 缶コーヒー1本以下のコスト。
 
-### 3.7.4 Retry & Failover Logic
+### 3.5.4 Retry & Failover Logic
 
 **リトライ戦略** (src/config/settings.py: LLM_RETRY_PARAMS):
 - 最大リトライ回数: 3回
@@ -515,7 +415,7 @@ graph TD
     style E fill:#ef4444,stroke:#dc2626,stroke-width:2px,color:#fff
 ```
 
-### 3.7.5 SDK & Communication Interface Specifications
+### 3.5.5 SDK & Communication Interface Specifications
 
 **モジュール**: `src/infra/llm_transporter.py`
 
@@ -529,14 +429,13 @@ graph TD
 
 **依存パッケージ**: `requirements.txt` 参照。
 
-### 3.8 Internal Constants (内部設定定数)
+### 3.6 Internal Constants (内部設定定数)
 
 src/config/settings.py で定義され、コード内で参照される定数。環境変数では変更しない。
 
 | 定数名 | 規定値 | 用途 |
 | :--- | :--- | :--- |
 | **CONTEXT_REPORT_THRESHOLD_PCT** | `0.5` | CONTEXT（鑑定文）を生成するかどうかの下落率閾値（%）。 |
-| **BROKER_ASSET_MAP_PENDING** | 中国株・ETF・債券・REIT の URL Hash マップ | 将来の取得対象となる資産クラス（現行パイプラインでは未使用）。 |
 
 ---
 
@@ -596,11 +495,11 @@ cp "${PROJECT_DIR}/data.tar.gz" "${ICLOUD_DEST_DIR}/data_$(date +%Y%m%d).tar.gz"
 * **[Acquisition]**: WebからのFetch、GmailからのOTP取得など、外部データ調達状況。
 * **[Parsing]**: 生データから Position/Ledger オブジェクトへの変換プロセス。
 * **[Audit]**: SummaryとDetailsの不一致、数値の整合性検証結果。
-* **[AUDIT]**: v4 BrokerAuditor の比較結果、または Broker 到達不能時の縮退警告。配信停止の根拠ではなく監査証跡である。
+* **[AUDIT]**: 監査層の比較結果、または到達不能時の縮退警告。配信停止の根拠ではなく監査証跡である。
 * **[Outcome]**: 最終的な処理結果（DISPATCHED, SKIPPED等）の要約。
 
 ### 5.3 Parser Statistics (FLP-3)
-BrokerCsvParser における解析結果は、単なる合計値報告ではなく、「概要」と「資産クラス別明細」の2段階で出力し、不整合（Audit差分）発生時のトレーサビリティを確保する。
+CSVパーサにおける解析結果は、単なる合計値報告ではなく、「概要」と「資産クラス別明細」の2段階で出力し、不整合（Audit差分）発生時のトレーサビリティを確保する。
 * **Summary (INFO)**: [Parse-Stats] Target: {Date} | Total: {N} positions ({N} files)
 * **Detail (DEBUG/INFO)**: - {AssetClass}: {Rows} rows -> {Positions} positions ({Status})
 

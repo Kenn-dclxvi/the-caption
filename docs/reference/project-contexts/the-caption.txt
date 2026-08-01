@@ -7,7 +7,7 @@
 
 <project>
   <name>THE CAPTION (v4.0 "Collection-Primary")</name>
-  <purpose>Automated financial reporting with a Collection-primary canonical ledger, Broker audit, weekly/monthly summaries, and v4 monolithic daily mail</purpose>
+  <purpose>Automated financial reporting with a Collection-primary canonical ledger, weekly/monthly summaries, and v4 monolithic daily mail</purpose>
   <entries>
     <entry name="v4_daily" path="src/app/entrypoints/v4_daily_main.py">v4 canonical daily report entrypoint</entry>
     <entry name="weekly" path="src/app/entrypoints/weekly_main.py">weekly summary entrypoint</entry>
@@ -38,12 +38,12 @@
 <architecture>
   <layers>
     <layer name="Logic">src/app/v4_engine.py / src/domain/universal_ingester.py / src/app/monthly_engine.py</layer>
-    <layer name="Infra">src/infra/browser_manager.py / src/infra/broker_client.py / src/infra/llm_transporter.py / src/infra/mail_sender.py</layer>
+    <layer name="Infra">src/infra/market_data.py / src/infra/llm_transporter.py / src/infra/mail_sender.py</layer>
     <layer name="View">src/app/renderer/</layer>
   </layers>
   <domain_isolation>
     <isolation domain="V4">src/app/v4_engine.py -&gt; UniversalIngester / MarketCurator / V4ContentRenderer / MailSender</isolation>
-    <isolation domain="COLLECTION">data/collection/market_units.csv is v4 SSOT A; collection_engine.py retired to legacy/v3/</isolation>
+    <isolation domain="COLLECTION">data/collection/market_units.csv is v4 SSOT A; the standalone collection engine is not part of this repository</isolation>
   </domain_isolation>
   <key_modules>
     <module name="universal_ingester.py">v4 dual-input SSOT ingester; writes ShadowLedger</module>
@@ -72,7 +72,7 @@
 <feature_decision_map>
   <rule topic="daily_mail">v4 daily mail changes target src/app/v4_engine.py, src/app/renderer/, and v4 view models.</rule>
   <rule topic="ledger">Asset valuation and canonical totals belong to UniversalIngester, ledger_schema, and ShadowLedger finalization. Renderer must not recompute ledger facts.</rule>
-  <rule topic="collection">data/collection/market_units.csv is v4 SSOT A. collection_engine.py and collection_main.py have been retired to legacy/v3/ and are not the v4 canonical path.</rule>
+  <rule topic="collection">data/collection/market_units.csv is v4 SSOT A. The standalone collection engine is not part of this repository and is not the v4 canonical path.</rule>
   <rule topic="monthly">Monthly v4 chronicle changes target monthly_curator, daily_metrics inputs, and v4_chronicle template. Portfolio Audit belongs to monthly flow, not daily flow.</rule>
   <rule topic="ai_prompt">Curator/Chronicle prompt changes target src/config/prompts.py and docs/reference/prompts.md. Keep system instructions separate from user data tags.</rule>
   <rule topic="view">Display-only changes belong to src/app/renderer/, including templates and view-model modules. View changes must not alter ledger generation or SSOT semantics.</rule>

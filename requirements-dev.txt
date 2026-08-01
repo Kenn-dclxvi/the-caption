@@ -38,8 +38,6 @@ exchange-calendars==4.13.1
     # via pandas-market-calendars
 frozendict==2.4.7
     # via yfinance
-greenlet==3.3.2
-    # via playwright
 h11==0.16.0
     # via httpcore
 httpcore==1.0.9
@@ -86,8 +84,6 @@ peewee==4.0.0
     # via yfinance
 platformdirs==4.9.2
     # via yfinance
-playwright==1.58.0
-    # via -r requirements.in
 pluggy==1.6.0
     # via
     #   pytest
@@ -102,8 +98,6 @@ pydantic==2.12.5
     #   openai
 pydantic-core==2.41.5
     # via pydantic
-pyee==13.0.1
-    # via playwright
 pygments==2.19.2
     # via pytest
 pyluach==2.3.0

@@ -1,12 +1,14 @@
 # ADR-0001: Trinity Separation
 
+**Status: Superseded**（ADR-0004 により外部取得層は監査層へ降格。公開版では実装ごと除外）
+
 ## Context
 
-Broker連携はブラウザ基盤・ドメイン操作・公開Facadeが混在すると、変更影響の境界が曖昧になり障害切り分けが遅延する。
+外部サイトからのブラウザ経由取得は、ブラウザ基盤・ドメイン操作・公開Facadeが混在すると、変更影響の境界が曖昧になり障害切り分けが遅延する。
 
 ## Decision
 
-Broker連携は `BrowserManager`（Infra）/ `BrokerOperator`（Domain Logic）/ `BrokerClient`（Facade）の三層分離を採用し、責務越境を禁止する。
+外部サイト取得層は `BrowserManager`（Infra）/ `Operator`（Domain Logic）/ `Client`（Facade）の三層分離を採用し、責務越境を禁止する。
 
 ## Non-goals
 
@@ -23,8 +25,13 @@ Broker連携は `BrowserManager`（Infra）/ `BrokerOperator`（Domain Logic）/
 
 責務境界が固定され、変更時の影響範囲と障害解析の起点が明確になる。実装コストは増えるが、運用安定性を優先する。
 
+## Supersession
+
+ADR-0004 で Collection-Primary へ主従反転し、外部取得層は正規入力から監査層へ降格した。本公開リポジトリでは、特定金融機関のログイン自動化を公開範囲に含めない判断により、この三層に対応する実装を持たない。本ADRは設計判断の経緯としてのみ保持する。
+
 ## Related
 
+- [ADR-0004 Collection-Primary v4](./ADR-0004-collection-primary-v4.md)
 - [ADR Decisions Index](./decisions_index.md)
 - [System Reference](../reference/system.md)
 - [Logic Reference](../reference/logic.md)

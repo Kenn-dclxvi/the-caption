@@ -8,7 +8,6 @@ from src.lib.logger import setup_logger
 class SystemUtils:
     __REV: Final[str] = "Rev. 11"
     __REQUIRED_ENV_KEYS: Final[List[str]] = [
-        "BROKER_ID", "BROKER_PASS", "IMAP_USER", "IMAP_PASS", 
         "SMTP_USER", "SMTP_PASS", "SMTP_TO"
     ]
     

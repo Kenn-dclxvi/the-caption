@@ -4,7 +4,6 @@ on:
   pull_request:
     paths:
       - "README.md"
-      - "docs/2.How-to_Guides.md"
       - "docs/how-to/index.md"
       - ".github/workflows/docs-canonical-command-guard.yml"
   push:
@@ -12,7 +11,6 @@ on:
       - main
     paths:
       - "README.md"
-      - "docs/2.How-to_Guides.md"
       - "docs/how-to/index.md"
       - ".github/workflows/docs-canonical-command-guard.yml"
 
@@ -32,7 +30,6 @@ jobs:
 
           files=(
             "README.md"
-            "docs/2.How-to_Guides.md"
             "docs/how-to/index.md"
           )
 

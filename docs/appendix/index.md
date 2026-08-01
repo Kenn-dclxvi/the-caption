@@ -10,7 +10,6 @@ v4.2 で追加された実装単位と責務の一覧。
 | `src/domain/universal_ingester.py` | `market_units.csv` と `external_assets.json` を読み込み、`data/v4_shadow_ledger.json` を生成する（`diff_pct / wtd_pct / mtd_pct / ytd_pct` を算出） |
 | `src/domain/collection_history_updater.py` | `market_units.csv` に定義された COLLECTION 資産の価格・FX履歴を yfinance 等から取得し、`data/collection/history/` へマージ・保存する |
 | `scripts/dev/run_shadow_ingester.py` | Universal Ingester の単独実行・観測用スクリプト |
-| `legacy/v3/src/app/broker_auditor.py` | Broker 取得と差分比較を監査層に隔離し、例外を Warning へ縮退する |
 | `src/domain/shadow_ledger_adapter.py` | `ShadowLedger` を既存 `MarketCurator` が扱える Legacy Ledger 互換へ変換する（`total_wtd` と資産 `wtd` を含む） |
 | `src/app/v4_engine.py` | v4日次のオーケストレーション。Canonical Ledger、Audit、AI、Render、Dispatch を接続する |
 | `src/app/entrypoints/v4_daily_main.py` | v4標準日次 CLI |
@@ -38,172 +37,11 @@ v4.2 追加範囲は次のユニットテストで観測する。
 | :--- | :--- |
 | `tests/unit/test_universal_ingester.py` | Dual Input SSOT、価格計算、外部資産マージ |
 | `tests/unit/test_ledger_schema.py` | `ShadowLedger` の合計検証 |
-| `legacy/v3/tests/unit/test_broker_auditor.py` | Broker監査の成功・縮退 |
 | `tests/unit/test_shadow_ledger_adapter.py` | Legacy Ledger 互換変換 |
 | `tests/unit/test_v4_engine.py` | v4日次オーケストレーション |
 | `tests/unit/test_v4_renderer.py` | Monolithic Renderer / ViewModel |
 
----
-
-## 2. Advanced Acquisition Logic (取得ロジック詳細)
-
-アセットごとの外科的取得（Surgical Strike）の内部挙動です。
-
-### 2.1 Execution Phases (執行フェーズ)
-
-**Phase 1: Demand Sensing (需要予測)**
-`PortfolioEngine` は `LedgerManager` に「今日の調達リスト」を問い合わせます。
-
-***Logic***: 各アセット（`us_stock`, `mutual` 等）について、以下の判定を行います。
-1. `archive/` 内の最新行の日付は `target_date` と一致するか？
-2. その行は `Freshness Guard`（有意な変動）をクリアしているか？
-
-***Output***: 上記を満たさない（＝未取得または古い）アセットの論理名リスト（例: `['us_stock.csv', 'mutual.csv']`）。
-
-**Phase 2: Surgical Strike (外科的取得)**
-`AssetIngester` は、渡されたリストが空でない場合のみ `BrokerClient` を起動します。
-
-***Targeting***: リストに含まれるアセットに対応する URL Hash（`#DAILY.GOODS.ALL.4001` 等）のみを順次訪問し、CSVをダウンロードします。
-
-***Optimization***: 不要な画面遷移（TOP画面待機等）を極力スキップし、Deep Link で直行します。
-
-**Phase 3: Incremental Verification (漸進的検証)**
-取得完了後、`LedgerManager` は即座に JSON をリビルドし、ステータスを再評価します。
-
-***遷移例***: `STAGNANT` (朝イチ) → 米国株取得 → `ADJUSTED` (一部更新) → 投信取得 → **`VERIFIED` (完成)**。
-
-### 2.2 Component Responsibilities (コンポーネント責務)
-
-| モジュール | 責務 |
-| :--- | :--- |
-| **LedgerManager** | **[司令塔]**: アセットごとの鮮度を個別鑑定し、不足リストを作成するメソッド `get_missing_assets(target_date)` を実装。 |
-| **AssetIngester** | **[執行者]**: 引数で `target_assets` を受け取り、`BROKER_ASSET_MAP` をフィルタリングして取得ループを回す。 |
-| **BrowserManager** | **[Infrastructure]**: ブラウザプロセス・Playwright接続を管理。ドメイン知識なし。Session State (Cookie) の永続化・復元を担当。 |
-| **BrokerOperator** | **[Domain Logic]**: Broker サイト固有の操作。ログイン、MFA、CSV取得。セレクタ定義の集約。エラーを `Tuple[bool, BrokerError]` で返却。ナビゲーション完了の待機は `click() + wait_for_load_state("load")` を使用し、クロスドメインリダイレクトチェーンの最終着地を保証する。 |
-| **BrokerClient** | **[Facade]**: BrowserManager と BrokerOperator を統率。既存インターフェース (open_session, download_csv, close_session) を保持。エラーコードを子層から伝播させ、呼び出し元 (Engine) への利便性向上。 |
-
-### 2.3 Sequence Diagram (シーケンス図 - Trinity Separation 対応)
-```mermaid
-sequenceDiagram
-    participant Engine as PortfolioEngine
-    participant Manager as LedgerManager
-    participant Ingester as AssetIngester
-    participant Client as BrokerClient (Facade)
-    participant Browser as BrowserManager
-    participant Operator as BrokerOperator
-    participant Broker as Broker (Web)
-
-    Engine->>Manager: get_missing_assets(today)
-    Manager-->>Engine: list: ["us_stock", "mutual"]
-    
-    alt list is Empty
-        Engine->>Engine: Skip Fetching
-    else list has items
-        Engine->>Ingester: run(targets=["us_stock", "mutual"])
-        
-        Ingester->>Client: open_session(headless=True)
-        Client->>Browser: open()
-        
-        Browser->>Browser: __launch_browser_process()
-        Browser->>Broker: Launch Chrome --remote-debugging-port=9222
-        Browser->>Browser: sync_playwright().connect_over_cdp(CDP_URL)
-        Broker-->>Browser: Connected
-        
-        Browser->>Browser: __is_valid_session_file()
-        Browser->>Browser: new_context(storage_state=...)
-        Browser-->>Client: Context Ready
-        
-        Client->>Operator: ensure_authenticated()
-        Operator->>Broker: GET URL_VIEW
-        Operator->>Operator: __verify_csv_button_exists()
-        
-        alt CSV button NOT found
-            Operator->>Operator: login()
-            Operator->>Broker: GET URL_LOGIN
-            Operator->>Broker: Fill loginid, passwd
-            Operator->>Broker: Click login button
-            Broker-->>Operator: MFA Challenge?
-
-            alt MFA Required
-                Operator->>Operator: __handle_mfa()
-                Operator->>Broker: Fetch OTP from Gmail
-                Operator->>Broker: Fill OTP + Click Verify
-                Broker-->>Operator: Authenticated
-            end
-            
-            Operator->>Broker: Navigate to portfolio view
-            Broker-->>Operator: View Page
-        end
-        
-        Operator-->>Client: (True, "")
-        Client-->>Ingester: Session Ready
-        
-        loop Each Asset (us_stock, mutual, ...)
-            Ingester->>Client: download_csv(hash="#DAILY.GOODS.ALL.4001", save_path=...)
-            
-            Client->>Operator: download_csv(hash, save_path, tab_selector=None)
-            
-            Operator->>Broker: GET URL_VIEW + hash
-            Operator->>Broker: Wait for CSV button
-            Operator->>Broker: Click CSV button
-            
-            Broker-->>Operator: Download triggered
-            Operator->>Operator: page.expect_download()
-            Operator->>Operator: download.save_as(save_path)
-            Broker-->>Operator: File saved
-            
-            Operator-->>Client: (True, "")
-            Client-->>Ingester: CSV saved to disk
-        end
-        
-        Ingester->>Client: close_session()
-        
-        Client->>Browser: close()
-        Browser->>Browser: __context.storage_state(path=STORAGE_STATE_PATH)
-        Browser->>Browser: __terminate_browser_process(pid)
-        
-        alt Windows
-            Browser->>Broker: taskkill /F /PID {pid}
-        else Unix
-            Browser->>Broker: os.killpg(os.getpgid(pid), SIGKILL)
-            note right of Browser: fallback: os.kill(pid, SIGKILL)
-        end
-        
-        Broker-->>Browser: Process Terminated
-        Browser->>Browser: __playwright.stop()
-        Browser-->>Client: Closed
-        
-        Client-->>Ingester: Done
-    end
-
-    Ingester-->>Engine: All assets fetched
-    
-    Engine->>Manager: rebuild_ledger(today)
-    Manager-->>Engine: Ledger (Status: VERIFIED?)
-    
-    opt Status == VERIFIED
-        Engine->>Notifier: Send Report
-    end
-```
-
-### 2.4 GmailOTP — OTP 取得ロジック
-
-MFA チャレンジ検知後、`GmailOTP.fetch_broker_code()` が IMAP で Gmail に接続し OTP を取得する。
-
-| ステップ | 内容 |
-| :--- | :--- |
-| **1. IMAP 接続** | `imap.gmail.com` に SSL 接続。`IMAP_USER` / `IMAP_PASS` を使用 |
-| **2. メール検索** | `FROM "no-reply@broker.example.com" SINCE {today}` で当日のメールを検索 |
-| **3. 件名フィルタ** | 最新メールの件名に `ワンタイムパスワード` を含むか検証 |
-| **4. 本文デコード** | `text/plain` パートを優先取得。charset は `get_content_charset()` で検出し、フォールバックは `iso-2022-jp` |
-| **5. コード抽出** | `re.search(r'(?:ワンタイムパスワード\|認証コード).*?\b(\d{6})\b', body, re.DOTALL)` — `re.DOTALL` により CRLF 区切りの別行にコードが存在する場合も対応 |
-| **6. クリーンアップ** | 取得成功後、メールに `\Seen` / `\Deleted` フラグを付与し `expunge()` で削除 |
-
-リトライは最大 12 回、間隔 20 秒（デフォルト）。
-
----
-
-## 3. Data Normalization Rules (データ正規化ルール)
+## 2. Data Normalization Rules (データ正規化ルール)
 
 データ取り込み時の文字列処理ルールです。
 
@@ -214,7 +52,7 @@ MFA チャレンジ検知後、`GmailOTP.fetch_broker_code()` が IMAP で Gmail
 
 ---
 
-## 4. Reporting Implementation (レポート実装詳細)
+## 3. Reporting Implementation (レポート実装詳細)
 
 Fortress Card (Zone 1) を構築するための具体的な HTML/CSS 構造です。
 ```html
@@ -257,11 +95,11 @@ Fortress Card (Zone 1) を構築するための具体的な HTML/CSS 構造で�
 
 ---
 
-## 5. COLLECTION Acquisition Logic (COLLECTIONデータ取得詳細)
+## 4. COLLECTION Acquisition Logic (COLLECTIONデータ取得詳細)
 
-COLLECTION ドメインのデータ取得フローです。Broker の BrowserManager・PlaywrightSession を使用せず、GAS プロキシ経由のシンプルな HTTP リクエストを採用しています。
+COLLECTION ドメインのデータ取得フローです。ブラウザ自動化を用いず、GAS プロキシ経由のシンプルな HTTP リクエストを採用しています。
 
-### 5.1 Fetch Flow (データ取得フロー)
+### 4.1 Fetch Flow (データ取得フロー)
 
 | ステップ | モジュール | 内容 |
 | :--- | :--- | :--- |
@@ -272,13 +110,13 @@ COLLECTION ドメインのデータ取得フローです。Broker の BrowserMan
 | **5. 指標計算** | CollectionEngine | 対象日以前の最新行から NAV を取得し、前日差・MTD・YTD を算出する |
 | **6. ViewModel 構築** | CollectionEngine | `CollectionPositionViewModel` / `CollectionSummaryViewModel` を構築してレポートへ渡す |
 
-### 5.2 CSV Encoding Strategy
+### 4.2 CSV Encoding Strategy
 
 MUFG・大和投資信託等の外部 CSV は Shift-JIS エンコードが多い。`CollectionEngine.__parse_nav_bytes()` は `utf-8 → shift-jis → cp932` の順にデコードを試み、各エンコードに対して `skiprows=[0, 1]` も組み合わせて試行する（CSV 先頭に余剰行がある場合に対応）。最初に成功したものを採用する。
 
 日付フォーマットは `YYYYMMDD`（例: `20180131`）と `YYYY/MM/DD`（例: `2018/07/03`）の両方に対応し、いずれも `pd.to_datetime` でパースされる。
 
-### 5.3 Metrics Calculation
+### 4.3 Metrics Calculation
 
 | 指標 | 計算式 |
 | :--- | :--- |
@@ -287,7 +125,7 @@ MUFG・大和投資信託等の外部 CSV は Shift-JIS エンコードが多い
 | **m_pct (MTD)** | `(NAV - 月初前最終NAV) / 月初前最終NAV × 100` |
 | **y_pct (YTD)** | `(NAV - 前年末最終NAV) / 前年末最終NAV × 100`（前年末最終NAV = `df[df["基準日"] < 当年1月1日].iloc[-1]`） |
 
-### 5.4 Fund Configuration Schema (market_units.csv スキーマ)
+### 4.4 Fund Configuration Schema (market_units.csv スキーマ)
 
 `data/collection/market_units.csv` の列定義。UTF-8 で保存し、`csv.DictReader` で読み込む。
 
@@ -297,7 +135,7 @@ MUFG・大和投資信託等の外部 CSV は Shift-JIS エンコードが多い
 | **units** | int | 保有口数 | YES |
 | **csv_url** | str | ファンド基準価額 CSV の直接 URL（`-f` フラグ時に HTTP GET する対象） | YES |
 
-### 5.5 ViewModel Specifications (View 層定義)
+### 4.5 ViewModel Specifications (View 層定義)
 
 #### CollectionSummaryViewModel
 
@@ -333,7 +171,7 @@ MUFG・大和投資信託等の外部 CSV は Shift-JIS エンコードが多い
 
 ---
 
-## 6. Historical Archives (歴史的アーカイブ)
+## 5. Historical Archives (歴史的アーカイブ)
 
 初期プロトタイプ（MUFG/GAS連携）の要件です。
 
@@ -347,11 +185,11 @@ MUFG・大和投資信託等の外部 CSV は Shift-JIS エンコードが多い
 
 ---
 
-## 7. MarketDataFetcher — 市場データ取得ロジック
+## 6. MarketDataFetcher — 市場データ取得ロジック
 
 `src/infra/market_data.py` の `fetch_market_context(us_date_str)` が yfinance から市場コンテキストを取得する際の処理フロー（Rev. 5）。
 
-### 7.1 Fetch & Normalization Pipeline
+### 6.1 Fetch & Normalization Pipeline
 
 | ステップ | 処理 | 目的 |
 | :--- | :--- | :--- |
@@ -376,7 +214,7 @@ S&P500: +X.XX% | NASDAQ100: +X.XX% | SOX: +X.XX% | 米10年債: X.XX% (+X.XX) | 
 
 v3.0 より導入された、知見の蓄積からパラダイムシフトを読み解く月次総括エンジンの詳細仕様です。
 
-### 6.1 Sequence Diagram: Monthly Execution Pipeline
+### 7.1 Sequence Diagram: Monthly Execution Pipeline
 ```mermaid
 sequenceDiagram
     participant Cron as Monthly Main
@@ -426,7 +264,7 @@ sequenceDiagram
     end
 ```
 
-### 6.2 Knowledge Re-distillation (ナレッジの再蒸留)
+### 7.2 Knowledge Re-distillation (ナレッジの再蒸留)
 
 日次レポートで AI が鑑定したインサイト（`knowledge_bank.md`）は、月次処理において以下のプロセスで再構成されます。
 

@@ -2,7 +2,7 @@
 
 ## 1. V4 Canonical Ledger Guard (Collection-Primary)
 
-v4.3 の日次処理は、Broker CSV の鮮度ではなく `ShadowLedger` の評価可能性を基準に配信可否を判定する。
+v4.3 の日次処理は、外部CSVの鮮度ではなく `ShadowLedger` の評価可能性を基準に配信可否を判定する。
 
 | 判定対象 | ルール | 結果 |
 | :--- | :--- | :--- |
@@ -11,9 +11,9 @@ v4.3 の日次処理は、Broker CSV の鮮度ではなく `ShadowLedger` の評
 | `pricing_status` | `PRICED` / `STATIC` は正常 | 配信可 |
 | `pricing_status` | `MISSING` は警告扱い | `allow_missing=True` の場合は縮退配信可 |
 
-この判定は `GuardRail.should_dispatch_shadow_ledger()` が担当する。v4.3 の CompletionLock は旧日次と同じロックファイルを使うが、Broker の `VERIFIED/STAGNANT` 判定には依存しない。
+この判定は `GuardRail.should_dispatch_shadow_ledger()` が担当する。v4.3 の CompletionLock は旧日次と同じロックファイルを使うが、外部取得の `VERIFIED/STAGNANT` 判定には依存しない。
 
-## 2. Freshness Guard (Legacy Broker)
+## 2. Freshness Guard (Legacy)
 最新のスナップショットにおいて、主要アセットクラスのデータが全て更新されているかを厳格に判定する。
 
 1. **個別変動検知 (Individual State Validation)**:
@@ -25,7 +25,7 @@ v4.3 の日次処理は、Broker CSV の鮮度ではなく `ShadowLedger` の評
    - 上記の対象クラスのうち、保有額が0より大きいにもかかわらず、変動幅が10円未満（不感帯）のアセットが一つでも存在する場合、データ全体のステータスを STAGNANT（停滞/未確定）に降格させる。
 
 3. **ドメイン知識の統合 (Sovereign Validation)**:
-   - 米国市場の休場日（祝日等）であっても、証券会社は日々の為替レート（USD/JPY）の変動を適用して円建て評価額を更新する。
+   - 米国市場の休場日（祝日等）であっても、証券会社側は日々の為替レート（USD/JPY）の変動を適用して円建て評価額を更新する。
    - この特性を利用し、外部の市場カレンダー（TimelineController等）に依存せず、純粋に「JPY評価額が10円以上動いたか」という内部状態（State）のみでデータの鮮度を自己証明するアーキテクチャとしている。
 
 ## 3. System Flow & CompletionLock
@@ -104,7 +104,7 @@ ShadowLedger生成
 現時点の確定範囲は、JP 休場日における国内資産の `DAY` freeze と `ABSOLUTE_AMOUNT` の 0 確定までとする。
 `WTD` / `MTD` / `YTD` の追加確定や専用 Mail Dataset は後続の拡張対象であり、renderer は引き続き確定処理済み `ShadowLedger` を参照する。
 
-**Legacy Daily Execution Flow (旧Broker主系パイプライン)**
+**Legacy Daily Execution Flow (旧主系パイプライン)**
 | フェーズ | 状態チェック | アクション |
 | :--- | :--- | :--- |
 | **1. Guard** | 本日の CompletionLock が存在するか？ |**YES**: 即時終了 (TERMINATE)<br>**NO**: 次へ進む |
@@ -150,7 +150,7 @@ LLM には `PROMPT_CHRONICLE_SYSTEM_V4` と、`<output_schema>` に埋め込ん�
 
 v4.3 では `data/collection/market_units.csv` は Canonical Ledger の SSOT A として昇格した。以下の `collection_main` フローは、単独の COLLECTION レポートを配信するレガシー/補助経路として維持する。
 
-Freshness Guard・Broker CSVダウンロード・CompletionLock（Broker）とは完全に独立したフローを持つ。
+Freshness Guard・外部CSVダウンロード・CompletionLock とは完全に独立したフローを持つ。
 祝日判定・市場カレンダーへの依存を持たず、実行可否はクーロンスケジューラ側で制御する。ファンドごとのデータ更新タイミングのバラつきを吸収するため、「指定日（target_date）」を絶対の基準とするプログレッシブ配信（段階的送信）ロジックを採用する。
 
 | フェーズ | 状態チェック | アクション |
@@ -366,7 +366,7 @@ def get_us_market_context(self, jp_target_date: str) -> Dict[str, object]:
 
 | 概念 | 定義 | 実装参照 |
 | :--- | :--- | :--- |
-| `target_date`（JP台帳対象日） | v4日次台帳に記録する日本時間基準の対象日。標準運用では 18:30 JST 以降に「当日」を対象にする。手動指定時は指定日をそのまま対象にする。旧 Broker 主系など legacy 経路の省略時前営業日解決とは分離する。 | `V4Engine.run()` / `UniversalIngester.build_shadow_ledger()` |
+| `target_date`（JP台帳対象日） | v4日次台帳に記録する日本時間基準の対象日。標準運用では 18:30 JST 以降に「当日」を対象にする。手動指定時は指定日をそのまま対象にする。旧主系など legacy 経路の省略時前営業日解決とは分離する。 | `V4Engine.run()` / `UniversalIngester.build_shadow_ledger()` |
 | `us_market_date`（US市場取引日） | `target_date - 1日` 以前で直近の NYSE 実取引日。通常は `target_date` の暦上の前日で、米国祝日・週末は前取引日にロールバックされる。標準実行帯の時刻によって再判定しない。 | `get_us_market_context()` の `trading_date` キー |
 | `calendar_date`（US暦日） | `target_date` の暦上の前日（US側）。`trading_date` との差異が NYSE 休場の有無を示す。 | `get_us_market_context()` の `calendar_date` キー |
 | 取引日と確定判定 | `trading_date` は対象セッションの日付、`source_date` は採用した原資産価格行の日付である。データの取得日時・更新日時とは分離する。必要な価格行と FX 行の期待日到達、および終値確認の結果は `pricing_status` で表す。 | `UniversalIngester._build_market_record()` |
@@ -409,7 +409,7 @@ def get_us_market_context(self, jp_target_date: str) -> Dict[str, object]:
 | 汚染源 | 流入経路 | 注入先 |
 | :--- | :--- | :--- |
 | 外部市場データ | `MarketDataFetcher.fetch_market_context()` → `market_data_str` | `us_market_context` → プロンプト文字列 |
-| アセット名 | Broker スクレイピング → `ledger.assets[].name` / `asset_vm.name` | `gallery_text` → プロンプト文字列 |
+| アセット名 | 外部取得 → `ledger.assets[].name` / `asset_vm.name` | `gallery_text` → プロンプト文字列 |
 
 ### 6.2 Layer 1: `MarketCurator.__sanitize_external(text)`
 

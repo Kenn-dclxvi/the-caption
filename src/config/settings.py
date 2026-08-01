@@ -1,7 +1,6 @@
 import os
 import io
 import sys
-import platform
 from typing import Final, Dict, Tuple, List, Any, Optional
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet, InvalidToken
@@ -35,41 +34,10 @@ LOG_FILE: Final[str] = os.path.join(LOG_DIR, "finance_report.log")
 LLM_TRACE_FILE: Final[str] = os.path.join(LOG_DIR, "llm_trace.log")
 HISTORY_FILE: Final[str] = os.path.join(DATA_DIR, "history.csv")
 LAST_ACCESS_FILE: Final[str] = os.path.join(DATA_DIR, "last_access_date.txt")
-STORAGE_STATE_PATH: Final[str] = "auth/state.json"
-
-__CURRENT_OS: Final[str] = platform.system()
-if __CURRENT_OS == "Darwin":
-    CHROME_PATH: Final[str] = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-elif __CURRENT_OS == "Windows":
-    CHROME_PATH: Final[str] = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-else:
-    CHROME_PATH: Final[str] = "/usr/bin/google-chrome"
 
 LAST_SENT_FILE_CURRENT: Final[str] = os.path.join(DATA_DIR, "last_sent_mail_V2.txt")
 LAST_SENT_FILE_MONTHLY: Final[str] = os.path.join(DATA_DIR, "last_sent_monthly.txt")
 LAST_SENT_FILE_WEEKLY: Final[str] = os.path.join(DATA_DIR, "last_sent_weekly.txt")
-
-URL_VIEW: Final[str] = "https://broker.example.com/view/"
-URL_LOGIN: Final[str] = "https://broker.example.com/login"
-
-BROKER_VIEW_BASE_URL: Final[str] = "https://broker.example.com/view/index.html"
-
-BROKER_ASSET_MAP: Final[Dict[str, Dict[str, str]]] = {
-    "history_total.csv":    {"hash": "#DAILY.GOODS.ALL"},
-    "history_transfer.csv": {"hash": "#DAILY.GOODS.ALL", "tab": "button[data-auxiliary='InOutCash']"},
-    "mutual.csv":        {"hash": "#DAILY.GOODS.ALL.3001"},
-    "us_stock.csv":      {"hash": "#DAILY.GOODS.ALL.4001"},
-    "jp_stock.csv":      {"hash": "#DAILY.GOODS.ALL.1001"},
-    "commodity.csv":     {"hash": "#DAILY.GOODS.ALL.10001"},
-    "short_term.csv":    {"hash": "#DAILY.GOODS.ALL.9001"}
-}
-
-BROKER_ASSET_MAP_PENDING: Final[Dict[str, Dict[str, str]]] = {
-    "china_stock.csv":   {"hash": "#DAILY.GOODS.ALL.5001"},
-    "etf_jp.csv":        {"hash": "#DAILY.GOODS.ALL.1003"},
-    "bond.csv":          {"hash": "#DAILY.GOODS.ALL.2001"},
-    "reit.csv":          {"hash": "#DAILY.GOODS.ALL.1002"}
-}
 
 DIR_ARCHIVE: Final[str] = os.path.join(DATA_DIR, "archive")
 DIR_CURRENT: Final[str] = os.path.join(DATA_DIR, "current")
@@ -114,5 +82,5 @@ SMTP_USER: Final[Optional[str]] = os.getenv("SMTP_USER")
 SMTP_PASS: Final[Optional[str]] = os.getenv("SMTP_PASS")
 SMTP_TO: Final[Optional[str]] = os.getenv("SMTP_TO")
 
-for d in [DATA_DIR, LOG_DIR, "auth", DIR_ARCHIVE, DIR_CURRENT, DIR_COLLECTION, DIR_COLLECTION_HISTORY, DIR_PHASE1_COLLECTION]:
+for d in [DATA_DIR, LOG_DIR, DIR_ARCHIVE, DIR_CURRENT, DIR_COLLECTION, DIR_COLLECTION_HISTORY, DIR_PHASE1_COLLECTION]:
     if not os.path.exists(d): os.makedirs(d)

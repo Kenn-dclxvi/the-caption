@@ -4,7 +4,7 @@
 - Daily / Monthly / Weekly の CLI エントリポイントは `src/app/entrypoints/` 配下に置く。
 - 正規の v4 daily コマンドは `python -m src.app.entrypoints.v4_daily_main` とする。
 - monthly / weekly コマンドは `python -m src.app.entrypoints.monthly_main` と `python -m src.app.entrypoints.weekly_main` を使う。
-- `src/app/entrypoints/daily_main.py` と `src/app/entrypoints/collection_main.py` は `legacy/v3/` へ退避済みで、`src/` 配下には存在しない。
+- `src/app/entrypoints/daily_main.py` と `src/app/entrypoints/collection_main.py` は本リポジトリに存在しない（v3 主系は公開範囲外）。
 - 設定とプロンプトは `src/config/` 配下を正規とする。
 - 共有の logger / models / utils は `src/lib/` 配下を正規とする。
 - `common/` / `config/` / `modules/` などのレガシー互換ルートやルートエントリポイント shim を再導入しない。

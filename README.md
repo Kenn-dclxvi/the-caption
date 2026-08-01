@@ -20,7 +20,7 @@ THE CAPTION は、資産の動きを「美術館のキャプション」のよ�
 | **[Reference](./docs/reference/system.md)** | **技術仕様書**<br>厳密な定義、データ構造、API仕様。 | • [System Specifications](./docs/reference/system.md)<br>• [Configuration & Security](./docs/reference/system.md)<br>• [Data Architecture](./docs/reference/system.md)<br>• [Project Contexts](./docs/reference/project-contexts/the-caption.txt) |
 | **[Logic Reference](./docs/reference/logic.md)** | **ロジック詳細定義**<br>鮮度判定、実行フロー、AIスキーマ、Curator仕様。 | • [Freshness Guard](./docs/reference/logic.md)<br>• [System Flow & CompletionLock](./docs/reference/logic.md)<br>• [Curator Logic](./docs/reference/logic.md)<br>• [TimelineController](./docs/reference/logic.md)<br>• [Monthly Curator](./docs/reference/logic.md) |
 | **[Explanation](./docs/explanation/index.md)** | **背景と理解**<br>設計思想、コンテキスト、歴史。 | • [Project Philosophy](./docs/explanation/index.md)<br>• [Architecture Concepts](./docs/explanation/index.md)<br>• [Knowledge Base](./docs/explanation/index.md) |
-| **[Appendix](./docs/appendix/index.md)** | **実装詳細・付録**<br>高度なロジック解説とアーカイブ。 | • [Advanced Acquisition Logic](./docs/appendix/index.md)<br>• [Data Normalization Rules](./docs/appendix/index.md)<br>• [Reporting Implementation](./docs/appendix/index.md)<br>• [BrokerClient Refactoring History](./docs/appendix/index.md#5-brokerclient-refactoring-history) |
+| **[Appendix](./docs/appendix/index.md)** | **実装詳細・付録**<br>高度なロジック解説とアーカイブ。 | • [Data Normalization Rules](./docs/appendix/index.md)<br>• [Reporting Implementation](./docs/appendix/index.md)<br>• [COLLECTION Acquisition Logic](./docs/appendix/index.md)<br>• [Monthly Chronicle Implementation](./docs/appendix/index.md) |
 | **[Design Specification](./docs/reference/design-system.md)** | **デザイン規定**<br>「鑑賞」としての資産管理を実現するための視覚言語。 | • [Design Philosophy](./docs/reference/design-system.md)<br>• [Color Palette (Slate Symphony)](./docs/reference/design-system.md)<br>• [Typography System](./docs/reference/design-system.md)<br>• [Unified Layout Matrix](./docs/reference/design-system.md) |
 | **[Prompt Design](./docs/reference/prompts.md)** | **プロンプト設計仕様**<br>CONTEXT（日次）・CHRONICLE（月次）の LLM プロンプト設計規定。 | • [CONTEXT Prompt Spec](./docs/reference/prompts.md)<br>• [CHRONICLE Prompt Spec](./docs/reference/prompts.md)<br>• [Output Schema & Validation](./docs/reference/prompts.md)<br>• [Generation Rules](./docs/reference/prompts.md) |
 
@@ -28,7 +28,7 @@ THE CAPTION は、資産の動きを「美術館のキャプション」のよ�
 
 ## 🧭 Repository Layout (AI Development)
 
-新規開発時の配置ルールと責務境界です。v4.3 では Collection 系の保有マスターと外部資産定義を正規入力に昇格し、Broker は監査用の従系として維持します。
+新規開発時の配置ルールと責務境界です。v4.3 では Collection 系の保有マスターと外部資産定義を正規入力とします。
 
 | Path | Role |
 | :--- | :--- |
@@ -69,8 +69,7 @@ THE CAPTION は、資産の動きを「美術館のキャプション」のよ�
 ### v4.2 "Temporal Integrity"
 * **V4.2 Refactoring**: v4日次の取得・鮮度判定・再取得フローを整理し、アセットクラス別の日付基準（JP株=`target_date`、US株/コモディティ/FX=`us_market_date`）を明確化しました。
 * **FX依存鮮度の統合**: USD建て資産・コモディティの鮮度判定に為替（FX）基準日を統合し、古い為替での確定送信を防止しました。
-* **Legacy Archive Policy**: v3以前のコードは `legacy/v3/` へ退避し、旧運用ドキュメントは `docs/archive/` を参照先として整理しました。
-* **Current Operation Canon**: 旧主系・互換shim撤廃後の通常運用は `src/app/entrypoints/v4_daily_main.py` / `src/app/v4_engine.py` / Collection-Primary の Canonical Ledger を正とし、旧Broker主系・旧CLIは `legacy/v3/` 退避済みの通常運用対象外です。
+* **Current Operation Canon**: 通常運用は `src/app/entrypoints/v4_daily_main.py` / `src/app/v4_engine.py` / Collection-Primary の Canonical Ledger を正とします。v3以前の主系・互換shimは本リポジトリに含みません。
 
 ### v4.1 "Collection-Primary"
 * **Dual Input SSOT**: `data/collection/market_units.csv` を市場連動資産の保有数正典、`data/external_assets.json` を現金・外部資産の絶対額正典として扱います。
@@ -92,7 +91,7 @@ THE CAPTION は、資産の動きを「美術館のキャプション」のよ�
 システムは「三位一体分離（Trinity Architecture）」により構成されています。
 
 1. **Logic（頭脳）**: `V4PortfolioEngine`, `UniversalIngester`, `MarketCurator`, `GuardRail` 等。正規台帳の生成、配信判定、AI推論に専念。
-2. **Infrastructure（運搬）**: `LedgerRepository`, `LlmTransporter`, `MailSender`, `BrowserManager` 等。物理的I/O、通信、外部APIとの接続を担う。v4では Broker I/O は監査層からのみ呼び出す。
+2. **Infrastructure（運搬）**: `LedgerRepository`, `LlmTransporter`, `MailSender`, `MarketDataFetcher` 等。物理的I/O、通信、外部APIとの接続を担う。
 3. **View（表現）**: `V4ContentRenderer`, Jinja2 Template 等。データの視覚表現へのマッピングのみを行う。
 
 ---
@@ -118,8 +117,7 @@ THE CAPTION は、資産の動きを「美術館のキャプション」のよ�
 | :--- | :--- |
 | **通常運用**（v4日次配信） | `python -m src.app.entrypoints.v4_daily_main` |
 | **初回／データ確認**（Shadow Ledger生成） | `python scripts/dev/run_shadow_ingester.py` |
-| **障害復旧**（Brokerを使わずv4を強制送信） | `python -m src.app.entrypoints.v4_daily_main -o -F` |
-| **レガシー切り戻し**（旧Broker主系） | `legacy/v3/` へ退避済み。使用不可。 |
+| **障害復旧**（監査をスキップしv4を強制送信） | `python -m src.app.entrypoints.v4_daily_main -o -F` |
 
 詰まったときは `logs/finance_report.log` のキーワード一覧（[How-to Guides §3.2](./docs/how-to/index.md)）を参照してください。
 
@@ -149,7 +147,7 @@ python -m src.app.entrypoints.monthly_main -u
 ```
 
 ### V4 Offline / Force Recovery (Troubleshooting)
-Broker 監査をスキップし、Collection-Primary 台帳でロックを無視して送信します。
+外部監査をスキップし、Collection-Primary 台帳でロックを無視して送信します。
 ```bash
 python -m src.app.entrypoints.v4_daily_main -o -F
 ```
@@ -186,8 +184,7 @@ tailscale serve --bg --https=3001 http://127.0.0.1:3001
 * **Output**: Responsive HTML Email (Jinja2), iCloud Drive Sync
 * **Data Acquisition**:
   - **UniversalIngester**: `market_units.csv` + `external_assets.json` から Canonical Ledger を生成
-  - **BrokerAuditor**: Brokerとの差分監査。失敗時は Warning に縮退
-  - **BrowserManager / BrokerOperator / BrokerClient**: 旧主系および監査用のブラウザ取得基盤
+  - **CollectionHistoryUpdater / MarketDataFetcher**: yfinance・GAS プロキシ経由で価格とFXを取得
 
 ---
 
@@ -204,10 +201,9 @@ tailscale serve --bg --https=3001 http://127.0.0.1:3001
 ### v4.2 "Temporal Integrity"
 * **V4.2 リファクタリング**: v4日次の取得・鮮度判定・再取得ロジックを整理し、アセットクラス別の価格基準日ルールをコードと仕様で統一しました。
 * **FX鮮度ガード**: USD建て資産・コモディティの評価で FX 基準日を鮮度判定に組み込み、為替の遅延を `STALE` として扱うようにしました。
-* **v3以前アーカイブ**: v3以前のコードは `legacy/v3/` へ退避し、旧運用ドキュメントは `docs/archive/` で参照管理します。
 
 ### v4.1 "Collection-Primary"
-* **主従反転**: Collection 側マスターを正規入力に昇格し、Broker スクレイピングを監査層へ降格しました。
+* **主従反転**: Collection 側マスターを正規入力に昇格し、証券会社サイトのスクレイピングを監査層へ降格しました（公開版では実装を含みません）。
 * **ShadowLedger**: 全資産を `ShadowAssetRecord` のフラットなリストに統合し、`total_value_jpy` を資産合計から検証します。
 * **V4 Daily Engine**: `src/app/entrypoints/v4_daily_main.py` と `src/app/v4_engine.py` により、Universal Ingester → V4 Curator → Monolithic Render → Dispatch を実行します。
 * **V4 Monolithic Renderer**: `src/app/renderer/templates/v4_monolithic.html` により、Safe Ratio / Exposure / Iron Bank / Total Net Assets (YTD / MTD / WTD + DAY) を含む5フェーズの単一HTMLメールを生成します。
@@ -226,9 +222,9 @@ tailscale serve --bg --https=3001 http://127.0.0.1:3001
 
 ### v3.1 "Sovereign Intelligence"
 * **Ledger Sovereign Model**: 旧来のCSV依存から脱却し、当日Ledger JSONを唯一の正典とする自律計算アーキテクチャを確立しました。外部不整合を自律計算で吸収します。
-* **日次/月次処理の完全分離**: コアエンジン（`src/app/entrypoints/daily_main.py` と `src/app/entrypoints/monthly_main.py`）を完全に分割し、オーケストレーションの指揮系統を純化しました。
+* **日次/月次処理の完全分離**: 日次エンジンと月次エンジン（`src/app/entrypoints/monthly_main.py`）を完全に分割し、オーケストレーションの指揮系統を純化しました。
 * **コンテキストの再利用 (`-u` オプション)**: AIによる鑑定結果や月次総括のキャッシュ（永続化ファイル）を再利用し、APIコストを消費せずにレポートを再送する機能を追加しました。
-* **COLLECTION ドメイン統合**: Broker の主権元帳から完全隔離された独立ドメインとして、外部ファンド（投資信託）の基準価額レポートを配信する `src/app/entrypoints/collection_main.py` を新設しました。GAS プロキシ経由の CSV 取得、ローカル履歴管理、および Slate Symphony デザインに準拠したレポート生成を提供します。
+* **COLLECTION ドメイン統合**: 証券会社側の主権元帳から完全隔離された独立ドメインとして、外部ファンド（投資信託）の基準価額レポートを配信する経路を新設しました。GAS プロキシ経由の CSV 取得、ローカル履歴管理、および Slate Symphony デザインに準拠したレポート生成を提供します。
 
 ### v3.0 "The Chronicle" (2026-02-22)
 日々の因果推論に加えて、知識の蓄積からパラダイムシフトを読み解く「月次総括」機能を実装しました。
@@ -250,7 +246,7 @@ AI プロバイダを **Claude (Anthropic)** に移行し、レポート品質�
 * **📈 品質向上**: レート制限が **20リクエスト/日 → 50リクエスト/分（2500倍）** に改善。論理的で禁止ワード違反のない高品質なレポートを安定生成。
 * **💰 コスト**: 月額 約 $0.40（缶コーヒー1本以下）
 * **🧹 Legacy モード完全削除**: v2.2 で廃止された Legacy モード関連のデッドコードを完全削除し、コードベースを簡素化。
-* **ブラウザ管理と Broker ドメイン操作を、独立した3層構造に完全分割しました**：
+* **ブラウザ管理と外部サイト操作を、独立した3層構造に完全分割しました**（ADR-0001。公開版では実装を含みません）。
 
 ### v2.2 "The Sovereign Hardening" (2026-02-09)
 信頼性と運用コスト効率を極限まで高めるため、コアアーキテクチャの全面的な「硬化」を行いました。

@@ -1,4 +1,3 @@
-import csv
 import json
 import pytest
 from unittest.mock import patch
@@ -6,11 +5,9 @@ from unittest.mock import patch
 import src.infra.context_repository as ctx_mod
 import src.infra.chronicle_repository as chr_mod
 import src.infra.knowledge_manager as km_mod
-import src.infra.ingester as ing_mod
 from src.infra.context_repository import ContextRepository
 from src.infra.chronicle_repository import ChronicleRepository
 from src.infra.knowledge_manager import KnowledgeManager
-from src.infra.ingester import LedgerIngester
 
 
 class TestContextRepositoryAtomicSave:
@@ -81,34 +78,3 @@ class TestKnowledgeManagerAtomicSave:
                 })
         assert not kb_file.exists()
         assert list(tmp_path.glob("*.md.tmp")) == []
-
-
-class TestIngesterAtomicSave:
-
-    def _write_csv(self, path, rows):
-        fieldnames = list(rows[0].keys())
-        with open(path, 'w', encoding='utf-8-sig', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
-
-    def test_merge_writes_atomically(self, tmp_path):
-        temp_csv = tmp_path / "temp_test.csv"
-        master_csv = tmp_path / "master_test.csv"
-        rows = [{"日付": "2026-03-01", "価格": "1000"}]
-        self._write_csv(temp_csv, rows)
-        ingester = LedgerIngester()
-        result = ingester._merge_to_master(str(temp_csv), str(master_csv))
-        assert result == ["2026-03-01"]
-        assert master_csv.exists()
-        assert list(tmp_path.glob("*.csv.tmp")) == []
-
-    def test_merge_failure_cleans_up_temp(self, tmp_path):
-        temp_csv = tmp_path / "temp_test.csv"
-        master_csv = tmp_path / "master_test.csv"
-        self._write_csv(temp_csv, [{"日付": "2026-03-01", "価格": "1000"}])
-        with patch("src.infra.ingester.os.replace", side_effect=OSError("replace failed")):
-            ingester = LedgerIngester()
-            result = ingester._merge_to_master(str(temp_csv), str(master_csv))
-        assert result == []
-        assert list(tmp_path.glob("*.csv.tmp")) == []

@@ -2,7 +2,7 @@
 
 - ドキュメントには正規の CLI パスのみを記載する。
 - アプリケーションの正規エントリポイントには `python -m src.app.entrypoints.v4_daily_main` / `python -m src.app.entrypoints.monthly_main` / `python -m src.app.entrypoints.weekly_main` を使う。
-- `python -m src.app.entrypoints.daily_main` と `python -m src.app.entrypoints.collection_main` は `legacy/v3/` へ退避済みで、`src/` 配下には存在しない。
+- `python -m src.app.entrypoints.daily_main` と `python -m src.app.entrypoints.collection_main` は本リポジトリに存在しない（v3 主系は公開範囲外）。
 - 開発者向けツールには `python scripts/dev/...` または `bash scripts/dev/...` を使う。
 - `main.py` / `monthly_main.py` / `collection_main.py` などのルートエントリポイント shim は記載しない。
 - `python tools/...` コマンドは記載しない。

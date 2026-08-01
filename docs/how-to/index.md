@@ -399,20 +399,7 @@ python scripts/dev/rebuild_knowledge.py --start 2026-01-01 --end 2026-01-31 --de
 4. API 呼び出し間に `--delay` 秒の sleep を挟み、レートリミットを回避する。
 5. 元帳が存在しない日付は警告ログを出力してスキップし、バッチ全体は止まらない。
 
-### 4.4 Session Setup (初回ブラウザ認証)
-Broker 証券へのログイン状態を手動で取得し、`auth/state.json` に保存します。本番の CSV 取得前に一度実行する想定です。
-
-**実行コマンド**:
-```bash
-python scripts/dev/setup_auth.py
-```
-**手順**:
-1. ブラウザが起動し、証券会社のログイン画面が開く。
-2. 手動でログインし、二要素認証（メールやアプリのコード入力）まで完了させる。
-3. 資産状況が見える画面まで進んだら、ターミナルに戻り Enter を押す。
-4. セッション情報が `auth/state.json` に保存される。
-
-### 4.5 SMTP Send Test (メール送信テスト)
+### 4.4 SMTP Send Test (メール送信テスト)
 `.env` の SMTP 設定（SMTP_USER / SMTP_PASS / SMTP_TO）を用いて、テストメールを送信し接続を確認します。
 
 **実行コマンド**:
@@ -421,7 +408,7 @@ python scripts/dev/test_email.py
 ```
 **前提**: `.env` に SMTP_USER, SMTP_PASS, SMTP_TO が設定されていること。
 
-### 4.6 Gemini Model List (利用可能モデル一覧)
+### 4.5 Gemini Model List (利用可能モデル一覧)
 Google Gemini API に設定されたキーで、`generateContent` に対応したモデル一覧を表示します。Secondary LLM の確認用です。
 
 **実行コマンド**:
@@ -430,7 +417,7 @@ python scripts/dev/check_models.py
 ```
 **前提**: `.env` に GOOGLE_API_KEY が設定されていること。
 
-### 4.7 LLM Cost Summary (トークン使用量・コスト概算)
+### 4.6 LLM Cost Summary (トークン使用量・コスト概算)
 `logs/llm_trace.log`（およびローテーション済みファイル）から `[Outcome] Token Usage` 行を解析し、指定月の LLM 呼び出し回数・入出力トークン・概算コストを集計します。
 
 **実行コマンド**:
@@ -442,7 +429,7 @@ python scripts/dev/cost_summary.py --month 2026-02
 | :--- | :--- | :--- |
 | `--month YYYY-MM` | 当月 | 集計対象月 |
 
-### 4.8 Project Merge (プロジェクト全文マージ)
+### 4.7 Project Merge (プロジェクト全文マージ)
 ソースツリーをレイヤー別（LOGIC / INFRA / VIEW / DOC / TOOL）に走査し、`__REV` ベースのリビジョン情報と import 依存を 1 ファイルにマージします。開発・レビュー用です。ファイル末尾フッターは付与しません。
 
 **実行コマンド**:
@@ -451,31 +438,12 @@ python scripts/dev/merge_project.py
 ```
 **出力**: プロジェクトルートに `Project_Full_v{VERSION}_{timestamp}.txt` が生成される。`data` / `logs` / `auth` / `.env` 等は除外され、各ファイルの本文はそのまま収録される。
 
-### 4.9 Batch CSV Fetch (全資産クラス一括取得)
-Playwright で Broker View にログインし、国内株・米国株・投資信託・債券・REIT 等の全資産クラス CSV を `data/raw/` に一括ダウンロードします。開発・手動取得用です。
-
-**実行コマンド**:
-```bash
-python scripts/dev/fetch_all_assets.py
-```
-**前提**: `.env` に BROKER_ID, BROKER_PASS が設定されていること。ブラウザは可視で起動する。
-
-### 4.10 PoC Fetch Detail (投資信託取得デバッグ)
-投資信託タブの CSV 取得フローを可視ブラウザで段階実行し、デバッグ用 CSV を出力する PoC ツールです。本番パイプラインには含まれません。
-
-**実行コマンド**:
-```bash
-python scripts/dev/poc_fetch_detail.py
-```
-**用途**: セレクタ変更や Broker 画面変更時の動作確認。
-
-### 4.11 Tools Shim Sunset (互換 shim 廃止)
+### 4.8 Tools Shim Sunset (互換 shim 廃止)
 `tools/` 互換 shim は **2026-03-05** に廃止済みです。以後は本ドキュメント内の module-based command guidance を正とします。
 
 ### 5. Legacy / v3 までの運用メモ
 
-以下は v4 標準運用には含めない、旧 Collection / Broker / v3 系の運用メモです。
-v3以前のコード・エントリポイント・スクリプトは `legacy/v3/` へ退避済みです。現行 v4 実行経路からは切り離されており、実行対象外です。
-旧運用ドキュメントは `docs/archive/` を参照先として扱います。
+以下は v4 標準運用には含めない、旧 Collection / v3 系の運用メモです。
+v3以前のコード・エントリポイント・スクリプトは本リポジトリに含まれません。現行 v4 実行経路からは切り離されており、実行対象外です。
 
-旧運用手順の参照が必要な場合は `legacy/v3/` 配下を参照してください。そのまま復活させず、現行仕様に基づく新規変更として扱ってください。
+旧運用手順をそのまま復活させず、現行仕様に基づく新規変更として扱ってください。

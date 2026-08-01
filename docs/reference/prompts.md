@@ -12,7 +12,7 @@ CONTEXTレポート（日次）とCHRONICLEレポート（月次）のプロン�
 
 ## 2. CONTEXT Prompt Design（日次レポート）
 
-v4.2 では `MarketCurator` のプロンプト契約は維持しつつ、入力元を Broker 主系 Ledger から Collection-Primary Canonical Ledger へ切り替える。`Portfolio Audit` は日次 CONTEXT から廃止し、月次 CHRONICLE で投資方針の監査軸として扱う。これは `Shield Evaluation` の防壁評価とは別責務であり、コア方針・現金比率・3〜5年停滞耐性のみを扱う。
+v4.2 では `MarketCurator` のプロンプト契約は維持しつつ、入力元を旧主系 Ledger から Collection-Primary Canonical Ledger へ切り替える。`Portfolio Audit` は日次 CONTEXT から廃止し、月次 CHRONICLE で投資方針の監査軸として扱う。これは `Shield Evaluation` の防壁評価とは別責務であり、コア方針・現金比率・3〜5年停滞耐性のみを扱う。
 
 ### 2.1 入力変数マップ
 

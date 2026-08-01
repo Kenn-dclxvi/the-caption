@@ -35,17 +35,17 @@ v2.0では、市場のボラティリティから投資家の精神的平穏（S
 
 ### 2.1 Collection-Primary Sovereign Ledger (v4.2)
 
-v4.2 では、資産データの主従関係を反転した。旧来の Broker スクレイピングは「日次レポートを動かすための必須入力」ではなく、正規台帳を監査するための従系である。
+v4.2 では、資産データの主従関係を反転した。旧来の証券会社サイトのスクレイピングは「日次レポートを動かすための必須入力」ではなく、正規台帳を監査するための従系である。
 
 * **SSOT A — Market Units**: `data/collection/market_units.csv`。株式、投資信託、コモディティ等の保有数を正典とする。
 * **SSOT B — Absolute Amounts**: `data/external_assets.json`。現金、企業型DC、その他外部資産の絶対額を正典とする。
 * **Canonical Ledger**: `UniversalIngester` が両SSOTを統合し、`ShadowLedger` (`data/v4_shadow_ledger.json`) を生成する。
-* **Audit, not Dependency**: `BrokerAuditor` は Broker 総額との差分を観測するだけであり、Broker 取得失敗は `[AUDIT]` 警告として縮退する。
+* **Audit, not Dependency**: 監査層は外部総額との差分を観測するだけであり、取得失敗は `[AUDIT]` 警告として縮退する。
 
-この設計により、Broker のログイン失敗、メンテナンス、CSV仕様変更、画面DOM変更が 20:00 の日次配信を止める構造的リスクを排除する。
+この設計により、外部サイトのログイン失敗、メンテナンス、CSV仕様変更、画面DOM変更が 20:00 の日次配信を止める構造的リスクを排除する。
 
 ### 2.2 Sovereign Ledger Concept   (脱・CSV依存 / Legacy)
-本システムは、外部ソース（証券会社のCSV）への依存を最小限に留め、システムが自律的に生成・管理する JSON データ (`Ledger`) を「正」とするアーキテクチャ (**Ledger Native**) へ移行しました。
+本システムは、外部ソース（証券会社が提供するCSV）への依存を最小限に留め、システムが自律的に生成・管理する JSON データ (`Ledger`) を「正」とするアーキテクチャ (**Ledger Native**) へ移行しました。
 
 * **旧アーキテクチャ (Legacy CSV-Dependency)**:
     * データ源泉: 毎回、過去の大量の CSV ファイルを走査して履歴を構築。
@@ -57,22 +57,20 @@ v4.2 では、資産データの主従関係を反転した。旧来の Broker �
 ### 2.3 System Architecture Overview (Trinity Architecture)
 システム全体を「三位一体の分離（The Trinity Separation）」の思想に基づき、以下の3層に厳密に分離し、責務を疎結合化しています。
 * **Logic (頭脳)**: `V4PortfolioEngine`, `UniversalIngester`, `PortfolioEngine`, `LedgerManager`, `LedgerFactory`, `DispatchController`, `MarketCurator`, `KnowledgeManager` 等。 純粋なビジネスロジックと計算、ドメイン知識に基づくオブジェクトの生成に専念する。
-* **Infrastructure (運搬)**: `Notifier`, `LedgerRepository`, `BrokerClient`, `BrokerCsvParser`, `LlmTransporter`, `ContextRepository`, `ChronicleRepository` 等。 ファイルI/O、文字列解析（正規表現パース）、ネットワーク通信、外部APIとの物理的な接続、および鑑定結果の永続化を担う。
+* **Infrastructure (運搬)**: `Notifier`, `LedgerRepository`, `MarketDataFetcher`, `LlmTransporter`, `ContextRepository`, `ChronicleRepository` 等。 ファイルI/O、文字列解析（正規表現パース）、ネットワーク通信、外部APIとの物理的な接続、および鑑定結果の永続化を担う。
 * **View (描画)**: `V4ContentRenderer`, `ContentRenderer`, `ViewModel`, `AlertRenderer`（システムアラート用）等。 データの視覚表現へのマッピングのみを行い、ロジック演算を排除した「愚直なるビュー（Dumb View）」として振る舞う。
 
 ### 2.3.1 COLLECTION Domain (v4.2 Primary / Legacy Standalone)
-v4.2 では **COLLECTION** は Broker と並列の独立ドメインではなく、日次正規台帳の主要入力へ昇格した。ただし `collection_main` による単独レポート経路は `legacy/v3/` に退避済みである。
+v4.2 では **COLLECTION** は証券会社ドメインと並列の独立ドメインではなく、日次正規台帳の主要入力へ昇格した。単独レポート経路は本リポジトリに含まない。
 
-* **主系の原則**: `data/collection/market_units.csv` は `UniversalIngester` の SSOT A であり、Broker の BrowserManager・BrokerClient に依存しない。
-* **レガシー独立経路**: `legacy/v3/src/app/entrypoints/collection_main.py` → `CollectionEngine` → `Notifier.collection_report()` という単独パイプラインを持つ。
+* **主系の原則**: `data/collection/market_units.csv` は `UniversalIngester` の SSOT A であり、ブラウザ自動化による外部取得に依存しない。
 * **共有リソース**: BaseRenderer（Slate Symphony カラーパレット）、MailSender、src/lib/ ユーティリティのみを共有する。
 * **データストア**: `data/collection/market_units.csv`（ファンド定義）と `data/collection/history/`（基準価額履歴）を独立管理する。
-* **採用背景**: 外部ファンド（MUFG 等）は Broker の CSV 取得・鮮度判定の仕組みが適用できないため、保有数とローカル履歴に基づく自律評価を選択した。
+* **採用背景**: 外部ファンド（MUFG 等）は証券会社側の CSV 取得・鮮度判定の仕組みが適用できないため、保有数とローカル履歴に基づく自律評価を選択した。
 
 ### 2.4 Pipeline Strategy (V4 vs Legacy)
 システムは2つの異なる集計パイプラインを持ち、目的に応じて使い分けます。
 * **V4 Collection-Primary Pipeline**: `market_units.csv` + `external_assets.json` から `ShadowLedger` を生成し、AI鑑定と単一HTMLメールへ進む標準日次経路。
-* **Legacy Broker Pipeline**: Broker証券内の資産を対象とした、旧来の騰落率ベースの集計。ロールバック用に残す。
 * **Fortress Pipeline (v2.0)**: 外部資産（Iron Bank）を統合した「要塞」としての集計。
     * **Total Definition**: `Exposure (Risk Assets)` + `Iron Bank (Safe Assets)`
     * **Damper Effect**: 外部資産のバッファにより、市場変動の衝撃を数値的に緩和して認識させます。
@@ -95,7 +93,7 @@ AI による日次の因果鑑定および月次の歴史的総括は計算コ�
 ### 2.7 Monthly Chronicle Orchestration (v3.0 拡張)
 月間の構造的変化を総括する「Monthly Chronicle」は、日次の「点」の分析を「線」へと統合するオーケストレーション層である。
 
-* **指揮系統の分離**: 日次処理（`legacy/v3/src/app/entrypoints/daily_main.py`）と月次処理（`src/app/entrypoints/monthly_main.py`）のエンジンを完全に分離。 日次のノイズに左右されず、月次基準での純粋な歴史的総括を行う。
+* **指揮系統の分離**: 日次処理と月次処理（`src/app/entrypoints/monthly_main.py`）のエンジンを完全に分離。 日次のノイズに左右されず、月次基準での純粋な歴史的総括を行う。
 * **Lazy Polling による確定待ち**: 月初の特定時刻に強制実行するのではなく、前月末データが `VERIFIED`（確定）状態になるまで自律的に待機し、条件が整った瞬間に一度だけ配信を行う（`MonthlyGuardRail`）。
 * **Knowledge Base の再蒸留**: `KnowledgeManager` に蓄積された 1 ヶ月分の日次 Insight を入力ソースとし、AI がそれらを構造的に再解釈（Re-distillation）することで、単なる統計値以上の「月間の文脈」を自律生成する。
 
@@ -158,15 +156,15 @@ JP基準日の前日が米国市場の休場日（連邦祝日・週末）であ
 
 1. **V4 Ledger Native Requirement**
     * **Rule**: v4日次の資産データ参照先は、当日生成された `data/v4_shadow_ledger.json` を正（Canonical Ledger）とする。
-    * **Boundary**: `current/ledger_YYYYMMDD.json` は旧 Broker 主系と互換変換のため維持されるが、v4標準日次の正典ではない。
+    * **Boundary**: `current/ledger_YYYYMMDD.json` は旧主系との互換変換のため維持されるが、v4標準日次の正典ではない。
 
 2. **The Fortress Equation (要塞の演算式)**
     * **Logic**: 総資産（Total Assets）は、常に以下の式で算出されなければならない。
      $$Total = Exposure(RiskAssets) + IronBank(SafeAssets)$$
     * **Constraint**: `Iron Bank` は市場変動係数 `0.0` の定数として扱い、外部資産定義ファイル（`data/external_assets.json`）からのインジェクションのみを許可する。
 
-3. **The Audit Engine (Broker 非依存化)**
-    * **Behavior**: v4標準日次では Broker の取得可否を配信可否に使わない。Broker 側で例外・未到達・CSV不整合が発生しても、`BrokerAuditor` が Warning を返し、配信フローは `ShadowLedger` の状態を基準に継続する。
+3. **The Audit Engine (外部取得への非依存化)**
+    * **Behavior**: v4標準日次では外部取得の可否を配信可否に使わない。外部側で例外・未到達・CSV不整合が発生しても監査層が Warning を返し、配信フローは `ShadowLedger` の状態を基準に継続する。
 
 ### 4.2 The Curator Protocol (人格と対話の定義)
 ユーザーの金融資産状況を評価するAIは以下の制約を定義します。
@@ -209,7 +207,7 @@ UIは情報の伝達ではなく、**「心理的影響の減衰（Damping）」
     * **Structure**: コードベースは Logic, View, Infrastructure の3層に厳密に分離する。
     * **Logic Purification (データ管理と生成の純化)**:
         * データ管理の司令塔（`LedgerManager`）から、物理的なファイルI/Oの責務を専用の `LedgerRepository` (Infra層) へ委譲する。
-        * CSVからの文字列抽出（正規表現処理）を `BrokerCsvParser` (Infra層) へ委譲し、抽出された純粋なデータから要塞メトリクス（Safe Ratio等）を計算・構築する責務を `LedgerFactory` (Logic層) に分離する。
+        * CSVからの文字列抽出（正規表現処理）を CSVパーサ (Infra層) へ委譲し、抽出された純粋なデータから要塞メトリクス（Safe Ratio等）を計算・構築する責務を `LedgerFactory` (Logic層) に分離する。
         * UI表示用ラベルの知識（"MUTUAL FUNDS"等）を `ViewModel` (View層) へ委譲し、Logic層を純粋な計算とドメイン知識のみに専念させる。
     * **Delegation (指揮系統 of Command)**: 指揮官である `PortfolioEngine` には条件分岐（If/Else）の記述を極力許さず、実行可否の判定は独立した憲兵モジュール（`GuardRail`）へ、配信の制御は `DispatchController` へ完全に委譲し、見通しの良い純粋なオーケストレーターとして振る舞うこと。
 
@@ -218,7 +216,7 @@ UIは情報の伝達ではなく、**「心理的影響の減衰（Damping）」
 
 3. **Scraping Fragility Limits (スクレイピングの脆さの受容と運用方針)**
 
-    本システムは、証券会社の Web UI を Selenium/Playwright 等のブラウザ操作で自動取得する。
+旧構成では、証券会社の Web UI をブラウザ操作で自動取得していた。**本公開リポジトリはこの取得層の実装を含まないが、設計原則として記録する。**
     このアプローチは DOM 構造への構造依存を内在しており、以下の方針でその脆さを **システムの限界（System Limit）** として明文化する。
 
     * **[ACCEPT_FRAGILITY] — 受容リスクの宣言**
@@ -230,7 +228,7 @@ UIは情報の伝達ではなく、**「心理的影響の減衰（Damping）」
         * 修復ロジックは将来の UI 変更時に二重の保守負債（修復ロジック自体の修正 + セレクタ修正）を生じさせるため、実装してはならない。
 
     * **[FAIL_FAST] — 速やかな失敗伝播の義務**
-        * DOM 要素が取得できない場合、ブラウザ操作層（`BrokerClient` 等 Infra 層）は下手に延命・リカバリを試みず、`SELECTOR_TIMEOUT` 等の具体的なエラーを **即座に上位層へ伝播させる** こと。
+        * DOM 要素が取得できない場合、ブラウザ操作層（Infra 層）は下手に延命・リカバリを試みず、`SELECTOR_TIMEOUT` 等の具体的なエラーを **即座に上位層へ伝播させる** こと。
         * 伝播されたエラーは `PortfolioEngine` の例外ハンドラを経由し、既存の `SYSTEM_CRASH` アラートを正常に発火させることで、オペレーターへの迅速な通知を保証する。
         * 「動作しているように見せる」ための沈黙（例外の握りつぶし・デフォルト値での継続）は § 4.2.4 の Graceful Degradation 原則に反し、禁止する。
 
@@ -242,23 +240,23 @@ UIは情報の伝達ではなく、**「心理的影響の減衰（Damping）」
 
 4. **External Authentication Dependency Acceptance（外部認証依存の受容）**
 
-    本システムは、証券会社へのログイン認証プロセスにおいて Gmail IMAP 経由での OTP（ワンタイムパスワード）取得に依存する。
-    このアプローチは Google・Broker 双方の外部仕様への構造依存を内在しており、以下の方針でその脆さを **システムの限界（System Limit）** として明文化する。
+旧構成では、証券会社へのログイン認証プロセスにおいてメール経由での OTP（ワンタイムパスワード）取得に依存していた。
+    このアプローチは外部仕様への構造依存を内在しており、以下の方針でその脆さを **システムの限界（System Limit）** として明文化した。**本公開リポジトリはこの認証層の実装を含まないが、設計原則として記録する。**
 
     * **[ACCEPT_EXT_AUTH] — 外部認証依存リスクの宣言**
-        * Gmail の IMAP セキュリティポリシー変更・OTP メール文面フォーマット変更・証券会社 MFA フロー変更によって OTP 取得パイプラインが停止するリスクは、**「解決すべきバグ」ではなく「運用上の受容リスク（Risk Acceptance）」** として扱う。
+        * メールプロバイダのセキュリティポリシー変更・OTP メール文面フォーマット変更・証券会社の MFA フロー変更によって OTP 取得パイプラインが停止するリスクは、**「解決すべきバグ」ではなく「運用上の受容リスク（Risk Acceptance）」** として扱う。
         * これらの変更頻度は低く、インシデント発生時の手動定数修正（正規表現・設定値の書き換え）コストは、複雑な自動追従ロジックの維持・保守コストを圧倒的に下回る。この非対称性を根拠に、リスク受容を正式な設計決定として採択する。
 
     * **[NO_AUTO_HEAL_AUTH] — 自己修復ロジックの禁止（アンチパターン）**
-        * OTP メール文面の自動解析（ヒューリスティックパース）、IMAP 認証方式の自動フォールバック、MFA フロー変更への自律的な適応を試みるエンジニアリングは **過剰設計（Over-engineering）のアンチパターン** として固く禁ずる。
+        * OTP メール文面の自動解析（ヒューリスティックパース）、認証方式の自動フォールバック、MFA フロー変更への自律的な適応を試みるエンジニアリングは **過剰設計（Over-engineering）のアンチパターン** として固く禁ずる。
         * 修復ロジックは将来の仕様変更時に二重の保守負債（修復ロジック自体の修正 + 定数修正）を生じさせるため、実装してはならない。
 
     * **[FAIL_FAST_AUTH] — 速やかな失敗伝播の義務**
-        * OTP 取得失敗・IMAP 接続失敗・正規表現マッチ失敗が発生した場合、認証レイヤー（`BrokerClient` 等 Infra 層）は下手に延命・リカバリを試みず、`MFA_FAILURE` 等の具体的なエラーを **即座に上位層へ伝播させる** こと。
+        * OTP 取得失敗・メール接続失敗・正規表現マッチ失敗が発生した場合、認証レイヤー（Infra 層）は下手に延命・リカバリを試みず、`MFA_FAILURE` 等の具体的なエラーを **即座に上位層へ伝播させる** こと。
         * 「認証済みのように見せる」ための沈黙（例外の握りつぶし・デフォルト値での継続）は § 4.2.4 の Graceful Degradation 原則に反し、禁止する。
 
     | 制約 | 内容 | 分類 |
     | :--- | :--- | :--- |
-    | `[ACCEPT_EXT_AUTH]` | Gmail IMAP / OTP / MFA フロー変更によるパイプライン停止を受容リスクとして宣言 | Risk Acceptance |
+    | `[ACCEPT_EXT_AUTH]` | メール / OTP / MFA フロー変更によるパイプライン停止を受容リスクとして宣言 | Risk Acceptance |
     | `[NO_AUTO_HEAL_AUTH]` | 認証フロー自動追従・OTPパース自動修復ロジックの実装を禁止 | Anti-pattern |
     | `[FAIL_FAST_AUTH]` | OTP取得失敗時は即座にエラー伝播し MFA_FAILURE を発火 | Operational Policy |

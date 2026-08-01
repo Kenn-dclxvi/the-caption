@@ -28,12 +28,6 @@ _mock_settings.SMTP_PORT = 465
 _mock_settings.SMTP_USER = "test@test.com"
 _mock_settings.SMTP_PASS = "testpass"
 _mock_settings.SMTP_TO = "to@test.com"
-_mock_settings.BROKER_ASSET_MAP = {}
-_mock_settings.BROKER_ASSET_MAP_PENDING = {}
-_mock_settings.URL_VIEW = "https://example.com"
-_mock_settings.URL_LOGIN = "https://example.com"
-_mock_settings.BROKER_VIEW_BASE_URL = "https://example.com"
-_mock_settings.CHROME_PATH = "/usr/bin/google-chrome"
 
 _mock_prompts = MagicMock()
 _mock_prompts.CURATOR_EXHIBITION_REPORT = (
@@ -50,8 +44,6 @@ _mock_prompts.CURATOR_BANNED_WORDS = ["禁止ワード"]
 _mock_prompts.US_MARKET_CONTEXT_NORMAL  = "Normal: {cal_label}"
 _mock_prompts.US_MARKET_CONTEXT_HOLIDAY = "Holiday: {cal_label} -> {trading_label}"
 
-sys.modules.setdefault("playwright",          MagicMock())
-sys.modules.setdefault("playwright.sync_api", MagicMock())
 _jpholiday_stub = MagicMock()
 _jpholiday_stub.is_holiday.return_value = False
 sys.modules.setdefault("jpholiday",            _jpholiday_stub)

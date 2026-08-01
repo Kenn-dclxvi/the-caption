@@ -188,8 +188,8 @@ case "${target}" in
     module="src.app.entrypoints.v4_daily_main"
     shift
     ;;
-  daily|d|legacy|broker|collection|c)
-    die "retired legacy mode: '${target}'. v3 entrypoints have been moved to legacy/v3/ and are not executable. Use './run.sh v4' for the current daily pipeline."
+  daily|d|legacy|collection|c)
+    die "retired legacy mode: '${target}'. v3 entrypoints are not part of this repository. Use './run.sh v4' for the current daily pipeline."
     ;;
   weekly|w)
     module="src.app.entrypoints.weekly_main"

@@ -26,7 +26,7 @@
 - Renderer / mail layout changes: read [Design System](./design-system.md) and renderer/view-model references.
 - Monthly / Chronicle changes: read the V4 Monthly Chronicle sections in [Logic Reference](./logic.md) and [Prompt Design](./prompts.md).
 - Prompt / LLM output changes: read [Prompt Design](./prompts.md) and the Prompt Injection Guard section in [System Reference](./system.md#23-prompt-injection-guard-プロンプトインジェクション防御).
-- Legacy Broker changes: read legacy sections explicitly; do not apply legacy assumptions to v4 daily.
+- Legacy changes: read legacy sections explicitly; do not apply legacy assumptions to v4 daily.
 
 ## Related
 

@@ -27,7 +27,7 @@
 
 1. 評価額計算式の変更（`price * units`、投信 NAV 換算、コモディティ換算）。
 2. 月次 AI プロンプト契約の変更。
-3. Legacy Broker 取得アーキテクチャの再設計。
+3. Legacy 外部取得アーキテクチャの再設計。
 4. runtime における旧 `data/collection/funds.csv` の互換読み込み。
 5. 既存 ledger の金額完全再計算。
 

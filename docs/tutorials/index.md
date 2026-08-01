@@ -114,13 +114,7 @@ GOOGLE_API_KEY="AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 # DeepSeek API (Emergency Backup - オプション)
 # DEEPSEEK_API_KEY="your_deepseek_api_key_here"
 
-# ===== Broker 証券 =====
-BROKER_ID="your_id"
-BROKER_PASS="your_pass"
-
 # ===== メール設定 =====
-IMAP_USER="your_main_email@domain.com"
-IMAP_PASS="xxxx xxxx xxxx xxxx"
 SMTP_USER="report_bot@domain.com"
 SMTP_PASS="yyyy yyyy yyyy yyyy"
 SMTP_TO="your_main_email@domain.com"

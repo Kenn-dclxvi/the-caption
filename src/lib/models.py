@@ -1,28 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Final
-from enum import Enum, auto
 
 __REV: Final[str] = "Rev. 42"
-
-class BrokerError(str, Enum):
-    NONE = "NONE"
-    BROWSER_OPEN_FAILURE = "BROWSER_OPEN_FAILURE"
-    BROWSER_CONNECTION_FAILURE = "BROWSER_CONNECTION_FAILURE"
-    AUTH_FAILURE = "AUTH_FAILURE"
-    SESSION_INVALID = "SESSION_INVALID"
-    SESSION_INVALID_FINAL = "SESSION_INVALID_FINAL"
-    SESSION_NOT_OPEN = "SESSION_NOT_OPEN"
-    NAV_FAILURE = "NAV_FAILURE"
-    SELECTOR_TIMEOUT = "SELECTOR_TIMEOUT"
-    TAB_SELECTOR_TIMEOUT = "TAB_SELECTOR_TIMEOUT"
-    CSV_BTN_TIMEOUT = "CSV_BTN_TIMEOUT"
-    DOWNLOAD_FAILED = "DOWNLOAD_FAILED"
-    MFA_FAILURE = "MFA_FAILURE"
-    POST_LOGIN_NAV_FAILURE = "POST_LOGIN_NAV_FAILURE"
-    UNEXPECTED_ERROR = "UNEXPECTED_ERROR"
-
-    def __str__(self) -> str:
-        return self.value
 
 @dataclass
 class LedgerMeta:
