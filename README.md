@@ -187,6 +187,18 @@ tailscale serve --bg --https=3001 http://127.0.0.1:3001
 
 ---
 
+## 🔗 関連リポジトリ
+
+AI駆動開発を「規約 → 計測 → 適用」の3層で回しています。本リポジトリは適用先にあたります。
+
+| リポジトリ | 役割 |
+| :--- | :--- |
+| [orchestration-prompt](https://github.com/Kenn-dclxvi/orchestration-prompt) | **規約**。エージェント実行制御の汎用プロンプトセット正本。本リポジトリの `AGENTS.md` と `prompts/` はここから適用しています |
+| [agent-execution-control-lab](https://github.com/Kenn-dclxvi/agent-execution-control-lab) | **計測**。実行制御が成果品質・token・所要時間へ与える影響を測る研究基盤。本リポジトリを評価対象 instance としています |
+| [the-caption](https://github.com/Kenn-dclxvi/the-caption) | **適用**。実運用しているポートフォリオ評価システム（本リポジトリ） |
+
+---
+
 ## 🛠️ Technology Stack
 
 * **Core**: Python 3.11+, Playwright (Automation), Pandas (Analysis)
