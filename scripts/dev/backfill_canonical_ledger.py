@@ -14,6 +14,7 @@ import argparse
 import os
 import sys
 from datetime import date, timedelta
+from typing import Dict, Optional
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 if ROOT not in sys.path:
@@ -35,12 +36,21 @@ def _ledger_path(date_str: str) -> str:
     return os.path.join(DIR_CURRENT, f"ledger_{date_str.replace('-', '')}.json")
 
 
-def _previous_ledger_records(repo: LedgerRepository, date_str: str) -> dict:
-    """前営業日の正本から DAY 比較の基準価格を引く（v4_engine と同一方針）。"""
+def _previous_ledger_records(
+    repo: LedgerRepository,
+    date_str: str,
+    pending: Optional[Dict[str, dict]] = None,
+) -> dict:
+    """前営業日の正本から DAY 比較の基準価格を引く（v4_engine と同一方針）。
+
+    `pending` は --dry-run 中に生成しただけで保存していない台帳。これを参照しないと
+    連続日の dry-run で 2 日目以降が取得元履歴へ落ち、実際に保存した場合と異なる
+    結果を表示してしまう。
+    """
     base = date.fromisoformat(date_str)
     for offset in range(1, _PREVIOUS_LEDGER_LOOKBACK_DAYS + 1):
         previous = (base - timedelta(days=offset)).isoformat()
-        ledger = repo.load(previous)
+        ledger = (pending or {}).get(previous) or repo.load(previous)
         if not isinstance(ledger, dict):
             continue
         confirmed_date = (ledger.get("meta") or {}).get("target_date") or previous
@@ -67,7 +77,12 @@ def _previous_ledger_records(repo: LedgerRepository, date_str: str) -> dict:
     return {}
 
 
-def backfill(date_str: str, force: bool, dry_run: bool) -> int:
+def backfill(
+    date_str: str,
+    force: bool,
+    dry_run: bool,
+    pending: Optional[Dict[str, dict]] = None,
+) -> int:
     target = _ledger_path(date_str)
     if os.path.exists(target) and not force:
         print(f"SKIP {date_str}: ledger already exists ({target})")
@@ -85,7 +100,7 @@ def backfill(date_str: str, force: bool, dry_run: bool) -> int:
     shadow = UniversalIngester().run(
         date_str,
         units_mode="strict",
-        previous_records=_previous_ledger_records(repo, date_str),
+        previous_records=_previous_ledger_records(repo, date_str, pending),
     )
     finalized = V4LedgerFinalizer(timeline).finalize(shadow)
     document = ShadowLedgerAdapter().to_canonical_document(finalized)
@@ -99,6 +114,9 @@ def backfill(date_str: str, force: bool, dry_run: bool) -> int:
         f"mtd={summary['total_mtd']} wtd={summary['total_wtd']} ytd={summary['total_ytd']}"
     )
     if dry_run:
+        # 保存はしないが、後続日が前営業日の正本として参照できるよう保持する。
+        if pending is not None:
+            pending[date_str] = document
         return 0
 
     repo.save_document(document, date_str)
@@ -119,10 +137,17 @@ def main() -> None:
     if dates != list(args.dates):
         print(f"NOTE ordering normalized to ascending: {' '.join(dates)}")
 
-    failures = 0
-    for date_str in dates:
-        failures += backfill(date_str, force=args.force, dry_run=args.dry_run)
-    sys.exit(1 if failures else 0)
+    pending: Dict[str, dict] = {}
+    for index, date_str in enumerate(dates):
+        if backfill(date_str, force=args.force, dry_run=args.dry_run, pending=pending):
+            # 後続日は失敗した日を前営業日の正本として参照する。そのまま続けると
+            # 取得元履歴や更に古い台帳を基準に保存し、失敗日を後で復元しても
+            # 既存台帳は --force なしでは作り直されないため不整合が固定される。
+            remaining = dates[index + 1:]
+            if remaining:
+                print(f"ABORT dependent dates skipped: {' '.join(remaining)}")
+            sys.exit(1)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

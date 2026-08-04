@@ -610,6 +610,20 @@ def test_missing_previous_ledger_falls_back_to_history(harness):
     assert mocks["ingester"].run.call_args.kwargs["previous_records"] == {}
 
 
+def test_canonical_ledger_persists_before_dependent_daily_outputs(harness):
+    # 正本の保存が失敗した日に daily_metrics / market_snapshot が残ると、
+    # 月次が対応する正本のない記録を入力として数えてしまう。
+    engine, mocks = harness
+    mocks["ledger_repo"].save_document.side_effect = RuntimeError("disk full")
+
+    assert engine.run(target_date="2026-04-25") is False
+
+    mocks["daily_metrics_repo"].save.assert_not_called()
+    mocks["market_snapshot_repo"].save.assert_not_called()
+    mocks["sender"].send.assert_not_called()
+    mocks["utils"].set_flag.assert_not_called()
+
+
 def test_format_test_does_not_finalize_canonical_ledger(harness):
     # レンダリング確認で正本を確定させると、後続の本番実行が VERIFIED を尊重して
     # 上書きを拒否し、実データが正本へ入らなくなる。

@@ -129,15 +129,9 @@ class V4PortfolioEngine:
             if not self.__persist_finalized_shadow_ledger(finalized_ledger):
                 logger.error("[Outcome] V4 finalized ShadowLedger persistence failed. Dispatch blocked.")
                 return False
-            daily_metrics = build_daily_metrics(finalized_ledger)
-            if not self.__daily_metrics_repo.save(daily_metrics, target_date_str):
-                logger.error(f"[Outcome] V4 daily metrics persistence failed: {target_date_str}. Dispatch blocked.")
-                return False
-            market_context = self.__build_v4_market_context(target_date_str)
-            if not self.__market_snapshot_repo.save(market_context, target_date_str):
-                logger.error(f"[Outcome] V4 market snapshot persistence failed: {target_date_str}. Dispatch blocked.")
-                return False
-
+            # 正本を最初に確定させる。daily_metrics / market_snapshot を先に保存すると、
+            # 正本の保存が失敗した日でもそれらが残り、月次が対応する正本のない記録を
+            # 入力として数えてしまう。
             canonical_ledger = self.__adapter.to_legacy_ledger(finalized_ledger)
             if format_test:
                 # レンダリング確認のみの実行。ここで正本を確定させると、後続の本番実行が
@@ -152,6 +146,15 @@ class V4PortfolioEngine:
                         f"[Outcome] V4 canonical ledger persistence failed: {target_date_str}. Dispatch blocked."
                     )
                     return False
+
+            daily_metrics = build_daily_metrics(finalized_ledger)
+            if not self.__daily_metrics_repo.save(daily_metrics, target_date_str):
+                logger.error(f"[Outcome] V4 daily metrics persistence failed: {target_date_str}. Dispatch blocked.")
+                return False
+            market_context = self.__build_v4_market_context(target_date_str)
+            if not self.__market_snapshot_repo.save(market_context, target_date_str):
+                logger.error(f"[Outcome] V4 market snapshot persistence failed: {target_date_str}. Dispatch blocked.")
+                return False
             is_provisional = any(asset.pricing_status in ("MISSING", "STALE") for asset in finalized_ledger.assets)
             summary_vm = SummaryViewModel(canonical_ledger.summary)
             raw_asset_vms = [PositionViewModel(position) for position in canonical_ledger.assets]

@@ -372,7 +372,7 @@ def get_us_market_context(self, jp_target_date: str) -> Dict[str, object]:
 | `target_date`（JP台帳対象日） | v4日次台帳に記録する日本時間基準の対象日。標準運用では 18:30 JST 以降に「当日」を対象にする。手動指定時は指定日をそのまま対象にする。旧主系など legacy 経路の省略時前営業日解決とは分離する。 | `V4Engine.run()` / `UniversalIngester.build_shadow_ledger()` |
 | `us_market_date`（US市場取引日） | `target_date - 1日` 以前で直近の NYSE 実取引日。通常は `target_date` の暦上の前日で、米国祝日・週末は前取引日にロールバックされる。標準実行帯の時刻によって再判定しない。 | `get_us_market_context()` の `trading_date` キー |
 | `calendar_date`（US暦日） | `target_date` の暦上の前日（US側）。`trading_date` との差異が NYSE 休場の有無を示す。 | `get_us_market_context()` の `calendar_date` キー |
-| 取引日と確定判定 | `trading_date` は対象セッションの日付、`source_date` は採用した原資産価格行の日付である。データの取得日時・更新日時とは分離する。必要な価格行と FX 行の期待日到達、および終値確認の結果は `pricing_status` で表す。 | `UniversalIngester._build_market_record()` |
+| 取引日と確定判定 | `trading_date` は対象セッションの日付、`source_date` は採用した原資産価格行の日付である。データの取得日時・更新日時とは分離する。ただし期待日の価格行が取得元に存在せず、前営業日の確定台帳から確定値を継承した場合は、`source_date` はその確定日を示す（[ADR-0002](../adr/ADR-0002-ledger-native-ssot.md)）。必要な価格行と FX 行の期待日到達、および終値確認の結果は `pricing_status` で表す。 | `UniversalIngester._build_market_record()` |
 | 米国休場日の扱い | 株価データは前取引日の値を引き継ぐ。AI プロンプトには `is_holiday=True` として注入され、存在しない市場変動へのハルシネーションを構造的に防止する。 | `get_us_market_context()` → `is_holiday` キー |
 | 境界時刻（JST） | 標準実行帯は **18:30〜20:00 JST**。最初の実行は 18:30、その後は 18:45 / 19:00 / 19:15 / 19:30 / 20:00 に再実行する。 | `../how-to/index.md §1.2 Routine Schedule` |
 | `manual_date` 指定時の注意 | 日本祝日を含む任意の日付を指定可能。v4 は legacy Freshness Guard の `STAGNANT` を使用しない。選択更新後も必要な価格または FX が期待日へ届かなければ `MISSING` / `STALE` の暫定配信とし、CompletionLock を記録しない。 | `V4Engine.run()` / `UniversalIngester.build_shadow_ledger()` |
