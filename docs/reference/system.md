@@ -10,10 +10,11 @@
 
 ### 1.1 Requirements V4 (Collection-Primary Canonical Ledger)
 * **Target Scope**: 株式、投資信託、コモディティ、現金、企業型DC、その他外部資産。
-* **Dual Input SSOT**:
+* **Dual Input SSOT（計算元の正典）**:
   - `data/collection/market_units.csv`: 市場価格で評価する資産の保有数 (`units`) を正典とする。
   - `data/external_assets.json`: 現金・外部資産の絶対額 (`amount`) を正典とする。
-* **Canonical Ledger**: `src/domain/universal_ingester.py` が両SSOTを統合し、`data/v4_shadow_ledger.json` を生成する。v4日次パイプラインではこの `ShadowLedger` を正規入力として扱う。
+* **統合結果**: `src/domain/universal_ingester.py` が両正典を統合し、`data/v4_shadow_ledger.json` を生成する。同一実行内では下流処理がこの `ShadowLedger` を入力として扱う。単一ファイルであり日次では上書きされるため、日をまたぐ基準には使わない。
+* **Canonical Ledger（出力の正本）**: 日次で確定保存する `data/current/ledger_YYYYMMDD.json`。週次/月次が `LedgerRepository.load` で参照し、翌営業日以降の `DAY` 比較の基準となる。`integrity_status = VERIFIED` の正本は後続実行で書き換えない（[ADR-0002](../adr/ADR-0002-ledger-native-ssot.md)）。資産別レコードは v4 の実態に合わせ、`price` / `fx_rate` / `source_date` / `pricing_status` / `warnings` を保持する。v4 の計算元に資産別取得原価は存在しないため、取得原価と損益は資産別に持たない。
 * **External Audit**: 証券会社サイトからの取得は必須データではなく比較監査へ降格した。到達不能でも配信は止めず `[AUDIT]` Warning として記録する。**本公開リポジトリは取得層の実装を含まない。**
 * **Monolithic Daily Mail**: `src/app/renderer/v4_content_renderer.py` が `ShadowLedger`、確定論的な日次コンテキスト、v3由来の Summary/Position 表示メトリクスを単一HTMLメールへ統合する。日次AI鑑定は廃止済みであり、常に確定論的コンテキストを使う（`-u` で既存キャッシュを再利用する場合を除く）。
 * **Daily Monthly Inputs**: v4日次は `data/current/daily_metrics_YYYYMMDD.json` と `data/current/market_snapshot_YYYYMMDD.json` を保存する。月次AIは `daily_metrics` と `market_snapshot` の両方を統合入力として使用し、market snapshot は `market_summary` 原文と主要指数・米10年債・USD/JPY・VIXの構造化観測値を併せて渡す（`PROMPT_CHRONICLE_SYSTEM_V4` の `<input_contract>` 参照）。
@@ -132,12 +133,12 @@ Layer 1 でサニタイズ済みであれば Layer 2 は通常発火しない。
 ## 3. Data Architecture (データ仕様)
 
 ### 3.1 Directory Structure & File Naming
-v4.3 の日次データは、Dual Input SSOT と Canonical Ledger の3点を中心に管理される。
+v4.3 の日次データは、計算元の正典（Dual Input SSOT）、同一実行内の統合結果、出力の正本（Canonical Ledger）を中心に管理される。
 
 ```text
 project_root/
 ├── data/
-│   ├── v4_shadow_ledger.json     # [Canonical Ledger] v4日次パイプラインの正規台帳
+│   ├── v4_shadow_ledger.json     # [統合結果] 両正典の統合。同一実行内の入力。日次で上書き
 │   ├── external_assets.json      # [SSOT B] 現金・企業型DC・その他外部資産の絶対額
 │   ├── portfolio_basis.json      # [取得原価] 月次キーごとの total_acquisition_cost_jpy。universal_ingester が読み込む
 │   ├── runtime/
@@ -184,7 +185,7 @@ project_root/
 │   │   ├── history_total.csv     # 資産推移
 │   │   └── history_transfer.csv  # 入出金履歴
 │   ├── current/                  # [Sovereign Layer] 確定元帳
-│   │   ├── ledger_20260201.json
+│   │   ├── ledger_20260201.json  # [Canonical Ledger] 出力の正本。日次で確定保存
 │   │   ├── context_20260201.json # [Context Cache] AI鑑定結果の永続化ファイル
 │   │   ├── daily_metrics_20260201.json # [V4 Monthly Input] 日次確定メトリクス
 │   │   ├── market_snapshot_20260201.json # [V4 Monthly Input] 市場観測スナップショット
@@ -215,9 +216,9 @@ project_root/
 |**STAGNANT** |CSV総額 == 資産合計 <br> AND <br> 前日差分 < 100円 |**停滞データ (鮮度落ち)**。<br>計算は合うが、主要資産が前日から微動だにしていない状態。 |
 |**ADJUSTED** |CSV総額 != 資産合計 |**自動調整データ**。<br>差額を UNKNOWN 資産として注入し、強制的にバランスさせた状態。 |
 
-### 3.3 Shadow Ledger Definition (v4 Canonical Ledger)
+### 3.3 Shadow Ledger Definition (同一実行内の統合結果)
 
-`ShadowLedger` は `src/domain/ledger_schema.py` で定義される v4.3 の評価結果モデルである。すべての資産は `assets: List[ShadowAssetRecord]` にフラットに格納され、`total_value_jpy` は各 `current_value_jpy` の合計と一致しなければならない。
+`ShadowLedger` は `src/domain/ledger_schema.py` で定義される v4.3 の評価結果モデルである。日次で確定保存する出力の正本は `data/current/ledger_YYYYMMDD.json` であり、本節のモデルはその生成元にあたる。すべての資産は `assets: List[ShadowAssetRecord]` にフラットに格納され、`total_value_jpy` は各 `current_value_jpy` の合計と一致しなければならない。
 v4 日次では `ShadowLedger` を生成後に確定判定へ回し、メール描画には確定処理済みの `ShadowLedger` を使う。
 
 | フィールド | 型 | 内容 |
