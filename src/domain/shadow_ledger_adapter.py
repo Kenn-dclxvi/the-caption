@@ -1,4 +1,4 @@
-from typing import Dict, Final, List
+from typing import Any, Dict, Final, List
 
 from src.config.settings import VERSION
 from src.domain.ledger_schema import ShadowAssetRecord, ShadowLedger
@@ -63,6 +63,49 @@ class ShadowLedgerAdapter:
             summary=summary,
             assets=assets,
         )
+
+    def to_canonical_document(self, shadow_ledger: ShadowLedger) -> Dict[str, Any]:
+        """日次で保存する出力の正本を構築する（ADR-0002）。
+
+        v3 の Position は資産別の取得原価と損益を持つが、v4 の計算元（SSOT A / B）に
+        資産別原価は存在せず、`portfolio_basis.json` は月次総額のみを持つ。
+        正本へダミー値を混入させないため、v4 で意味を持つ値だけを保持し、
+        代わりに v4 固有の鮮度（`pricing_status` / `source_date` / `warnings`）を残す。
+        `meta` と `summary` は週次/月次の読み取り互換のため v3 形式を維持する。
+        """
+        legacy = self.to_legacy_ledger(shadow_ledger)
+        return {
+            "meta": dict(legacy.meta.__dict__),
+            "summary": dict(legacy.summary.__dict__),
+            "assets": [
+                self._to_canonical_asset(index, record)
+                for index, record in enumerate(shadow_ledger.assets, start=1)
+            ],
+        }
+
+    def _to_canonical_asset(self, index: int, record: ShadowAssetRecord) -> Dict[str, Any]:
+        is_cash = self._is_cash_record(record)
+        return {
+            "id": record.source_symbol or record.name or f"shadow-{index}",
+            "name": record.name,
+            "source": record.source,
+            "asset_class": record.asset_class,
+            "category": record.category,
+            "currency": record.currency,
+            "units": record.units,
+            "price": record.price,
+            "fx_rate": record.fx_rate,
+            "source_symbol": record.source_symbol,
+            "source_date": record.source_date,
+            "value_jpy": int(round(record.current_value_jpy)),
+            "day_diff_jpy": 0.0 if is_cash else record.diff_val_jpy,
+            "day_diff_pct": 0.0 if is_cash else record.diff_pct,
+            "wtd_pct": None if is_cash else record.wtd_pct,
+            "mtd_pct": None if is_cash else record.mtd_pct,
+            "ytd_pct": None if is_cash else record.ytd_pct,
+            "pricing_status": record.pricing_status,
+            "warnings": list(record.warnings),
+        }
 
     def _to_position(self, index: int, record: ShadowAssetRecord) -> Position:
         value_jpy = int(round(record.current_value_jpy))

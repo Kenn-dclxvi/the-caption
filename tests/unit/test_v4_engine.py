@@ -137,6 +137,22 @@ def _ledger(total_return_jpy=100, diff_jpy=10, diff_pct=0.1):
     )
 
 
+def _canonical_document(integrity_status="VERIFIED"):
+    return {
+        "meta": {
+            "generated_at": "2026-04-25T00:00:00",
+            "target_date": "2026-04-25",
+            "version": "4.3-v4",
+            "integrity_status": integrity_status,
+            "has_next_day_record": False,
+        },
+        "summary": {"total_assets_jpy": 1000, "total_diff_pct": 0.1},
+        "assets": [
+            {"id": "FundA", "name": "FundA", "price": 1000.0, "pricing_status": "PRICED"},
+        ],
+    }
+
+
 @pytest.fixture
 def harness(tmp_path):
     with patch("src.app.v4_engine.Notifier") as MockNotifier, \
@@ -147,6 +163,7 @@ def harness(tmp_path):
          patch("src.app.v4_engine.ShadowLedgerAdapter") as MockAdapter, \
          patch("src.app.v4_engine.ContextRepository") as MockContextRepo, \
          patch("src.app.v4_engine.DailyMetricsRepository") as MockDailyMetricsRepo, \
+         patch("src.app.v4_engine.LedgerRepository") as MockLedgerRepo, \
          patch("src.app.v4_engine.KnowledgeManager") as MockKnowledge, \
          patch("src.app.v4_engine.V4ContentRenderer") as MockRenderer, \
          patch("src.app.v4_engine.MailSender") as MockSender, \
@@ -162,6 +179,7 @@ def harness(tmp_path):
         adapter = MockAdapter.return_value
         context_repo = MockContextRepo.return_value
         daily_metrics_repo = MockDailyMetricsRepo.return_value
+        ledger_repo = MockLedgerRepo.return_value
         knowledge = MockKnowledge.return_value
         renderer = MockRenderer.return_value
         sender = MockSender.return_value
@@ -183,8 +201,11 @@ def harness(tmp_path):
         guard.should_dispatch_shadow_ledger.return_value = True
         ingester.run.return_value = _shadow()
         adapter.to_legacy_ledger.return_value = _ledger()
+        adapter.to_canonical_document.return_value = _canonical_document()
         context_repo.exists.return_value = False
         daily_metrics_repo.save.return_value = True
+        ledger_repo.save_document.return_value = None
+        ledger_repo.load.return_value = None
         market_snapshot_repo.save.return_value = True
         knowledge.record_insight.return_value = True
         renderer.render.return_value = "<html>v4</html>"
@@ -219,6 +240,7 @@ def harness(tmp_path):
                 "adapter": adapter,
                 "context_repo": context_repo,
                 "daily_metrics_repo": daily_metrics_repo,
+                "ledger_repo": ledger_repo,
                 "knowledge": knowledge,
                 "renderer": renderer,
                 "sender": sender,
@@ -241,7 +263,7 @@ def test_v4_engine_dispatches_from_universal_ingester(harness):
         us_market_date="2026-04-24",
     )
     mocks["ensure_units_snapshot"].assert_called_once_with("2026-04-25", allow_create=False)
-    mocks["ingester"].run.assert_called_once_with("2026-04-25", units_mode="strict")
+    mocks["ingester"].run.assert_called_once_with("2026-04-25", units_mode="strict", previous_records={})
     mocks["daily_metrics_repo"].save.assert_called_once()
     saved_metrics = mocks["daily_metrics_repo"].save.call_args[0][0]
     assert saved_metrics["schema_version"] == "v4.1-daily-metrics"
@@ -365,7 +387,7 @@ def test_v4_engine_uses_today_when_target_date_is_omitted(harness):
         us_market_date="2026-04-24",
     )
     mocks["ensure_units_snapshot"].assert_called_once_with("2026-04-27", allow_create=True)
-    mocks["ingester"].run.assert_called_once_with("2026-04-27", units_mode="strict")
+    mocks["ingester"].run.assert_called_once_with("2026-04-27", units_mode="strict", previous_records={})
     mocks["sender"].send.assert_called_once_with("CAPTION [2026-04-27]", "<html>v4</html>")
 
 
@@ -512,6 +534,154 @@ def test_daily_metrics_persistence_failure_prevents_dispatch_and_lock(harness):
 def test_market_snapshot_persistence_failure_prevents_dispatch_and_lock(harness):
     engine, mocks = harness
     mocks["market_snapshot_repo"].save.return_value = False
+
+    assert engine.run(target_date="2026-04-25") is False
+
+    mocks["sender"].send.assert_not_called()
+    mocks["utils"].set_flag.assert_not_called()
+
+
+def test_canonical_ledger_is_persisted_for_target_date(harness):
+    engine, mocks = harness
+
+    assert engine.run(target_date="2026-04-25") is True
+
+    mocks["ledger_repo"].save_document.assert_called_once()
+    saved_document, saved_date = mocks["ledger_repo"].save_document.call_args[0]
+    assert saved_date == "2026-04-25"
+    assert saved_document is mocks["adapter"].to_canonical_document.return_value
+
+
+def test_stale_pricing_still_persists_canonical_ledger(harness):
+    engine, mocks = harness
+    mocks["ingester"].run.return_value = _shadow(pricing_status="STALE")
+
+    assert engine.run(target_date="2026-04-25") is True
+
+    mocks["ledger_repo"].save_document.assert_called_once()
+    assert mocks["ledger_repo"].save_document.call_args[0][1] == "2026-04-25"
+
+
+def test_previous_ledger_records_are_passed_to_ingester(harness):
+    engine, mocks = harness
+    mocks["ledger_repo"].load.side_effect = lambda d: (
+        {
+            "meta": {"target_date": "2026-04-24", "integrity_status": "VERIFIED"},
+            "assets": [
+                {
+                    "id": "GC=F",
+                    "price": 4049.10009765625,
+                    "fx_rate": 160.18,
+                    "pricing_status": "PRICED",
+                    "source_date": "2026-04-23",
+                },
+                {"id": "NYFANG", "current_price": 90492.0},
+                {"id": "Cash", "price": 0.0},
+            ],
+        }
+        if d == "2026-04-24"
+        else None
+    )
+
+    assert engine.run(target_date="2026-04-25") is True
+
+    records = mocks["ingester"].run.call_args.kwargs["previous_records"]
+    assert records["GC=F"] == {
+        "price": 4049.10009765625,
+        "fx_rate": 160.18,
+        "pricing_status": "PRICED",
+        "source_date": "2026-04-23",
+        "target_date": "2026-04-24",
+    }
+    # v3.5 以前の台帳は資産別の鮮度を持たないため pricing_status は None のまま渡す。
+    assert records["NYFANG"]["price"] == 90492.0
+    assert records["NYFANG"]["pricing_status"] is None
+    # v3.5 以前の台帳は資産別の為替を持たないため、円建て比較へは進まない。
+    assert records["NYFANG"]["fx_rate"] is None
+    assert "Cash" not in records
+
+
+def test_missing_previous_ledger_falls_back_to_history(harness):
+    engine, mocks = harness
+    mocks["ledger_repo"].load.return_value = None
+
+    assert engine.run(target_date="2026-04-25") is True
+
+    assert mocks["ingester"].run.call_args.kwargs["previous_records"] == {}
+
+
+def test_canonical_ledger_persists_before_dependent_daily_outputs(harness):
+    # 正本の保存が失敗した日に daily_metrics / market_snapshot が残ると、
+    # 月次が対応する正本のない記録を入力として数えてしまう。
+    engine, mocks = harness
+    mocks["ledger_repo"].save_document.side_effect = RuntimeError("disk full")
+
+    assert engine.run(target_date="2026-04-25") is False
+
+    mocks["daily_metrics_repo"].save.assert_not_called()
+    mocks["market_snapshot_repo"].save.assert_not_called()
+    mocks["sender"].send.assert_not_called()
+    mocks["utils"].set_flag.assert_not_called()
+
+
+def test_format_test_does_not_finalize_canonical_ledger(harness):
+    # レンダリング確認で正本を確定させると、後続の本番実行が VERIFIED を尊重して
+    # 上書きを拒否し、実データが正本へ入らなくなる。
+    engine, mocks = harness
+
+    engine.run(target_date="2026-04-25", format_test=True)
+
+    mocks["ledger_repo"].save_document.assert_not_called()
+
+
+def test_forced_rerun_warns_when_recomputed_total_diverges(harness):
+    engine, mocks = harness
+    mocks["ledger_repo"].load.return_value = {
+        "meta": {"target_date": "2026-04-25", "integrity_status": "VERIFIED"},
+        "summary": {"total_assets_jpy": 999},
+        "assets": [],
+    }
+
+    assert engine.run(target_date="2026-04-25", force_send=True) is True
+
+    mocks["ledger_repo"].save_document.assert_not_called()
+
+
+def test_verified_canonical_ledger_is_never_overwritten(harness):
+    engine, mocks = harness
+    mocks["ledger_repo"].load.return_value = {
+        "meta": {"target_date": "2026-04-25", "integrity_status": "VERIFIED"}
+    }
+
+    assert engine.run(target_date="2026-04-25") is True
+
+    mocks["ledger_repo"].save_document.assert_not_called()
+    mocks["sender"].send.assert_called_once()
+
+
+def test_stagnant_canonical_ledger_is_updated_by_later_run(harness):
+    engine, mocks = harness
+    mocks["ledger_repo"].load.return_value = {
+        "meta": {"target_date": "2026-04-25", "integrity_status": "STAGNANT"}
+    }
+
+    assert engine.run(target_date="2026-04-25") is True
+
+    mocks["ledger_repo"].save_document.assert_called_once()
+
+
+def test_unreadable_existing_ledger_does_not_block_persistence(harness):
+    engine, mocks = harness
+    mocks["ledger_repo"].load.return_value = None
+
+    assert engine.run(target_date="2026-04-25") is True
+
+    mocks["ledger_repo"].save_document.assert_called_once()
+
+
+def test_canonical_ledger_persistence_failure_prevents_dispatch_and_lock(harness):
+    engine, mocks = harness
+    mocks["ledger_repo"].save_document.side_effect = RuntimeError("disk full")
 
     assert engine.run(target_date="2026-04-25") is False
 

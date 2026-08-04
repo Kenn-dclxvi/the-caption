@@ -1,5 +1,9 @@
+import tempfile
+from unittest.mock import patch
+
 from src.domain.ledger_schema import ShadowAssetRecord, ShadowLedger
 from src.domain.shadow_ledger_adapter import ShadowLedgerAdapter
+from src.infra.ledger_repository import LedgerRepository
 
 
 def test_shadow_ledger_adapter_creates_legacy_ledger_for_existing_dispatcher():
@@ -183,3 +187,60 @@ def test_total_period_returns_do_not_underweight_a_loser_after_the_loss():
     ledger = ShadowLedgerAdapter().to_legacy_ledger(shadow)
 
     assert ledger.summary.total_ytd == "-25.00%"
+
+
+def test_v4_ledger_survives_repository_round_trip_for_weekly_monthly_readers():
+    # v4 の確定台帳は LedgerRepository.load のスキーマ検証を通る必要がある。
+    # 通らないと週次/月次が台帳を読めず、保存しても無意味になる。
+    shadow = ShadowLedger(
+        target_date="2026-08-04",
+        generated_at="2026-08-04T18:30:02",
+        ssot_a_path="data/collection/market_units.csv",
+        ssot_b_path="data/external_assets.json",
+        ssot_b_active_key="2026-08",
+        total_value_jpy=1000,
+        total_return_jpy=100,
+        total_return_pct=11.11,
+        assets=[
+            ShadowAssetRecord(
+                source="MARKET_UNITS",
+                name="Gold",
+                asset_class="COMMODITIES",
+                category="COMMODITIES",
+                currency="JPY",
+                units=2.95568,
+                price=4049.10009765625,
+                source_symbol="GC=F",
+                source_date="2026-07-31",
+                current_value_jpy=1000,
+                diff_val_jpy=-10,
+                diff_pct=-1.2438720710539055,
+                pricing_status="STALE",
+            ),
+        ],
+    )
+    document = ShadowLedgerAdapter().to_canonical_document(shadow)
+    assert document["meta"]["integrity_status"] == "STAGNANT"
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        with patch("src.infra.ledger_repository.DIR_CURRENT", tmp_dir):
+            repo = LedgerRepository()
+            repo.save_document(document, "2026-08-04")
+            loaded = repo.load("2026-08-04")
+
+    assert loaded is not None, "v4 ledger failed LedgerRepository schema validation"
+    assert loaded["meta"]["target_date"] == "2026-08-04"
+    assert loaded["meta"]["integrity_status"] == "STAGNANT"
+    assert len(loaded["assets"]) == 1
+
+    gold = loaded["assets"][0]
+    # v4 で意味を持つ値は保持し、鮮度も正本に残る。
+    assert gold["id"] == "GC=F"
+    assert gold["price"] == 4049.10009765625
+    assert gold["source_date"] == "2026-07-31"
+    assert gold["pricing_status"] == "STALE"
+    assert gold["units"] == 2.95568
+    # v4 の計算元に資産別取得原価は存在しないため、ダミー値を持たせない。
+    assert "acquisition_price" not in gold
+    assert "profit_loss" not in gold
+    assert "is_nisa" not in gold

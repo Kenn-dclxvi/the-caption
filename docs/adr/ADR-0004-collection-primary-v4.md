@@ -6,6 +6,8 @@
 
 一方、Collection 系には保有数を管理する `data/collection/market_units.csv` と、現金・外部資産の絶対額を管理する `data/external_assets.json` が存在する。これらは性質が異なるため、単一ファイルへ統合せず、Dual Input SSOT として扱う。
 
+本 ADR が定めるのは**計算元の正典**（評価の入力として何を信じるか）に限る。**出力の正本**（確定した状態をどこが保持するか）は [ADR-0002](./ADR-0002-ledger-native-ssot.md) が定める。両者は別レイヤーであり競合しない。以降、計算元には「正典」、出力には「正本」を用いる。
+
 ## Decision
 
 v4.0 では Collection-Primary へ主従反転する。
@@ -14,8 +16,8 @@ v4.0 では Collection-Primary へ主従反転する。
 - `data/current/collection_units_YYYYMMDD.json` を日付別 Units 固定入力 snapshot とし、`strict` mode では snapshot 欠損・不正を blocking とする。
 - `data/external_assets.json` を SSOT B とし、現金・外部資産の `amount` を正典とする。
 - `UniversalIngester` が両入力を統合し、`ShadowLedger` (`data/v4_shadow_ledger.json`) を生成する。
-- `ShadowLedger.ssot_a_path` は正本 `market_units.csv` を示し、実際に採用した Units 入力元は `ShadowLedger.units_source` に記録する。
-- v4日次パイプラインは `ShadowLedger` を Canonical Ledger として AI因果推論とレポート生成へ渡す。
+- `ShadowLedger.ssot_a_path` は計算元の正典 `market_units.csv` のパスを示し、実際に採用した Units 入力元は `ShadowLedger.units_source` に記録する。
+- v4日次パイプラインは同一実行内の統合結果 `ShadowLedger` を AI因果推論とレポート生成へ渡す。日次で確定して保存する出力の正本は `data/current/ledger_YYYYMMDD.json` であり、その扱いは ADR-0002 に従う。
 - 外部取得系は監査層へ隔離し、差分比較と到達不能警告のみを担わせる（公開版では実装を持たない）。
 - 日次HTMLメールは `V4ContentRenderer` の Monolithic Scroll へ統合する。
 
@@ -42,6 +44,7 @@ v4.0 では Collection-Primary へ主従反転する。
 ## Related
 
 - [ADR Decisions Index](./decisions_index.md)
+- [ADR-0002 Ledger Native SSOT](./ADR-0002-ledger-native-ssot.md)（出力の正本）
 - [System Reference](../reference/system.md)
 - [Logic Reference](../reference/logic.md)
 - [Design System](../reference/design-system.md)

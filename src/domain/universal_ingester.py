@@ -71,6 +71,7 @@ class UniversalIngester:
         target_date: Optional[str] = None,
         units_mode: Literal["daily", "strict"] = "daily",
         allow_live_csv_in_strict: bool = False,
+        previous_records: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> ShadowLedger:
         active_date = target_date or datetime.now().strftime("%Y-%m-%d")
         canonical_market_assets = self._load_fund_config()
@@ -98,6 +99,7 @@ class UniversalIngester:
                     us_market_date,
                     jp_market_date,
                     fx_metrics,
+                    previous_records,
                 )
             )
 
@@ -154,11 +156,13 @@ class UniversalIngester:
         output_path: Optional[str] = None,
         units_mode: Literal["daily", "strict"] = "daily",
         allow_live_csv_in_strict: bool = False,
+        previous_records: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> ShadowLedger:
         ledger = self.build_shadow_ledger(
             target_date,
             units_mode=units_mode,
             allow_live_csv_in_strict=allow_live_csv_in_strict,
+            previous_records=previous_records,
         )
         if output_path:
             atomic_write_json(output_path, ledger.model_dump())
@@ -383,6 +387,7 @@ class UniversalIngester:
         us_market_date: str,
         jp_market_date: str,
         fx_metrics: Optional[Dict[str, Any]],
+        previous_records: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> ShadowAssetRecord:
         expected_source_date = self._expected_source_date(
             asset,
@@ -396,6 +401,8 @@ class UniversalIngester:
             us_market_date,
             expected_source_date,
             fx_metrics,
+            self._previous_ledger_price(asset, previous_records),
+            self._previous_ledger_fx(asset, previous_records),
         )
         if metrics is None:
             return ShadowAssetRecord(
@@ -425,8 +432,23 @@ class UniversalIngester:
             and asset_class in CLOSE_CHECK_ASSET_CLASSES
             and not self._is_closed_fn(asset_class, asset.get("source_symbol", ""), expected_source_date)
         )
-        is_stale = is_price_stale or is_fx_stale or is_close_unconfirmed
         warnings: List[str] = []
+        if is_price_stale:
+            inherited_date = self._inheritable_confirmed_date(
+                asset,
+                previous_records,
+                expected_source_date,
+                metrics["price"],
+            )
+            if inherited_date is not None:
+                # 期待日の価格が取得元に無い場合、前営業日に確定した正本の値をその確定日の
+                # 値として継承する (ADR-0002)。取得元が前回確定時と同一であることを
+                # 価格一致で確認しているため、確定内容を遡って揺らさない。
+                warnings.append(f"inherited confirmed value from canonical ledger {inherited_date}")
+                source_date = inherited_date
+                is_price_stale = False
+
+        is_stale = is_price_stale or is_fx_stale or is_close_unconfirmed
         if is_fx_stale:
             warnings.append("fx rate stale or unavailable for expected market date")
         if is_close_unconfirmed:
@@ -451,6 +473,35 @@ class UniversalIngester:
             pricing_status="STALE" if is_stale else "PRICED",
             warnings=warnings,
         )
+
+    def _inheritable_confirmed_date(
+        self,
+        asset: Dict[str, Any],
+        previous_records: Optional[Dict[str, Dict[str, Any]]],
+        expected_source_date: str,
+        current_price: Any,
+    ) -> Optional[str]:
+        """前営業日の正本から確定値を継承できる場合、その確定日を返す。
+
+        継承は次を全て満たす場合に限る。
+        - 前営業日の正本がその資産を `PRICED`（確定）として記録している
+        - その正本の対象日が期待日以降である（期待日の状態を満たす確定である）
+        - 取得元から算出した価格が正本の価格と一致する（確定時と同じ根拠である）
+
+        価格一致を要件にすることで、取得元が更新された場合は継承せず通常判定へ戻す。
+        """
+        record = self._previous_ledger_record(asset, previous_records)
+        if record is None or record.get("pricing_status") != "PRICED":
+            return None
+        confirmed_date = record.get("target_date")
+        if not isinstance(confirmed_date, str) or confirmed_date < expected_source_date:
+            return None
+        price = record.get("price")
+        if not isinstance(price, (int, float)) or not isinstance(current_price, (int, float)):
+            return None
+        if float(price) != float(current_price):
+            return None
+        return confirmed_date
 
     def _expected_source_date(
         self,
@@ -489,6 +540,50 @@ class UniversalIngester:
             return None
         return self._calculate_market_price(fx_asset, target_date)
 
+    @staticmethod
+    def _previous_ledger_record(
+        asset: Dict[str, Any],
+        previous_records: Optional[Dict[str, Dict[str, Any]]],
+    ) -> Optional[Dict[str, Any]]:
+        # 正本である前営業日の確定台帳のレコードを引く。
+        # 台帳は id に source_symbol を持ち、無い資産は name で記録される。
+        if not previous_records:
+            return None
+        for key in (asset.get("source_symbol"), asset.get("name")):
+            if not key:
+                continue
+            record = previous_records.get(str(key))
+            if isinstance(record, dict):
+                return record
+        return None
+
+    @staticmethod
+    def _positive_number(value: Any) -> Optional[float]:
+        return float(value) if isinstance(value, (int, float)) and value > 0 else None
+
+    @staticmethod
+    def _previous_ledger_price(
+        asset: Dict[str, Any],
+        previous_records: Optional[Dict[str, Dict[str, Any]]],
+    ) -> Optional[float]:
+        # 前営業日の確定台帳に記録された価格を DAY 比較の基準にする。
+        record = UniversalIngester._previous_ledger_record(asset, previous_records)
+        if record is None:
+            return None
+        return UniversalIngester._positive_number(record.get("price"))
+
+    @staticmethod
+    def _previous_ledger_fx(
+        asset: Dict[str, Any],
+        previous_records: Optional[Dict[str, Dict[str, Any]]],
+    ) -> Optional[float]:
+        # 値段だけを正本基準にすると、為替が当日値のまま残って評価額の変化を
+        # DAY が取りこぼす。前日側は値段と為替の両方を正本の確定値で揃える。
+        record = UniversalIngester._previous_ledger_record(asset, previous_records)
+        if record is None:
+            return None
+        return UniversalIngester._positive_number(record.get("fx_rate"))
+
     def _calculate_market_asset(
         self,
         asset: Dict[str, Any],
@@ -496,18 +591,26 @@ class UniversalIngester:
         us_market_date: str,
         expected_source_date: str,
         fx_metrics: Optional[Dict[str, Any]],
+        previous_price: Optional[float] = None,
+        previous_fx: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         if asset["asset_class"] == "MUTUAL_FUNDS":
-            return self._calculate_fund_value(asset, target_date, expected_source_date)
+            # 投資信託は基準価額そのものが円建てのため為替の合わせ込みは不要。
+            return self._calculate_fund_value(asset, target_date, expected_source_date, previous_price)
         if asset["asset_class"] == _COMMODITY_ASSET_CLASS:
-            return self._calculate_commodity_value(asset, target_date, us_market_date, fx_metrics)
-        return self._calculate_stock_value(asset, target_date, expected_source_date, fx_metrics)
+            return self._calculate_commodity_value(
+                asset, target_date, us_market_date, fx_metrics, previous_price, previous_fx
+            )
+        return self._calculate_stock_value(
+            asset, target_date, expected_source_date, fx_metrics, previous_price, previous_fx
+        )
 
     def _calculate_fund_value(
         self,
         asset: Dict[str, Any],
         target_date: str,
         price_target_date: str,
+        previous_price: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         df_up = self._history_rows_up(asset["name"], "基準日", price_target_date)
         if df_up is None or df_up.empty:
@@ -515,7 +618,7 @@ class UniversalIngester:
         latest = df_up.iloc[-1]
         prev = df_up.iloc[-2] if len(df_up) > 1 else latest
         nav = float(latest["基準価額"])
-        prev_nav = float(prev["基準価額"])
+        prev_nav = previous_price if previous_price is not None else float(prev["基準価額"])
         current_value = (nav / 10000) * float(asset["units"])
         source_date_str = latest["基準日"].strftime("%Y-%m-%d")
         if source_date_str < target_date:
@@ -542,6 +645,8 @@ class UniversalIngester:
         target_date: str,
         price_target_date: str,
         fx_metrics: Optional[Dict[str, Any]],
+        previous_price: Optional[float] = None,
+        previous_fx: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         # USD-denominated stocks use US market dates in the history CSV.
         # US Friday's close is first observed by the JP system on JP Monday
@@ -549,7 +654,12 @@ class UniversalIngester:
         # the JP target_date's week boundary rather than the US source date's.
         uses_us_market_date = asset["asset_class"] == _US_STOCK_ASSET_CLASS or asset["currency"] == "USD"
         week_origin = target_date if uses_us_market_date else None
-        price_metrics = self._calculate_market_price(asset, price_target_date, week_origin=week_origin)
+        price_metrics = self._calculate_market_price(
+            asset,
+            price_target_date,
+            week_origin=week_origin,
+            previous_price=previous_price,
+        )
         if price_metrics is None:
             return None
 
@@ -559,8 +669,18 @@ class UniversalIngester:
                 return None
             fx_rate = float(fx_metrics["price"])
 
-        current_value = float(price_metrics["price"]) * float(asset["units"]) * fx_rate
-        diff_val = float(price_metrics.get("diff_price", 0.0)) * float(asset["units"]) * fx_rate
+        units = float(asset["units"])
+        unit_value_jpy = float(price_metrics["price"]) * fx_rate
+        current_value = unit_value_jpy * units
+        previous_unit_value_jpy = self._previous_unit_value_jpy(previous_price, previous_fx)
+        if previous_unit_value_jpy is not None:
+            # 前日側も正本の確定値（値段と為替）で円建てに揃え、評価額の変化と
+            # DAY を一致させる。数量は当日値のみを使うため積立分は混入しない。
+            diff_val = (unit_value_jpy - previous_unit_value_jpy) * units
+            diff_pct = self._pct(unit_value_jpy, previous_unit_value_jpy)
+        else:
+            diff_val = float(price_metrics.get("diff_price", 0.0)) * units * fx_rate
+            diff_pct = price_metrics.get("diff_pct")
         return {
             "date": price_metrics["date"],
             "price": price_metrics["price"],
@@ -568,7 +688,7 @@ class UniversalIngester:
             "fx_date": fx_metrics.get("date") if asset["currency"] == "USD" and fx_metrics else None,
             "current_value_jpy": current_value,
             "diff_val_jpy": diff_val,
-            "diff_pct": price_metrics.get("diff_pct"),
+            "diff_pct": diff_pct,
             "wtd_pct": price_metrics.get("wtd_pct"),
             "mtd_pct": price_metrics.get("mtd_pct"),
             "ytd_pct": price_metrics.get("ytd_pct"),
@@ -580,18 +700,34 @@ class UniversalIngester:
         target_date: str,
         us_market_date: str,
         fx_metrics: Optional[Dict[str, Any]],
+        previous_price: Optional[float] = None,
+        previous_fx: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         # Commodities (Gold, Silver, Platinum) are US-market traded; same JP-observation
         # lag as USD stocks — anchor WTD to JP target_date week boundary.
-        price_metrics = self._calculate_market_price(asset, us_market_date, week_origin=target_date)
+        price_metrics = self._calculate_market_price(
+            asset,
+            us_market_date,
+            week_origin=target_date,
+            previous_price=previous_price,
+        )
         if price_metrics is None or fx_metrics is None:
             return None
 
         price = float(price_metrics["price"])
         fx_rate = float(fx_metrics["price"])
+        units = float(asset["units"])
         current_price_jpy = price * fx_rate / _COMMODITY_OZ_TO_G
-        current_value = current_price_jpy * float(asset["units"])
-        diff_val = float(price_metrics.get("diff_price", 0.0)) * fx_rate / _COMMODITY_OZ_TO_G * float(asset["units"])
+        current_value = current_price_jpy * units
+        previous_price_jpy = self._previous_unit_value_jpy(
+            previous_price, previous_fx, divisor=_COMMODITY_OZ_TO_G
+        )
+        if previous_price_jpy is not None:
+            diff_val = (current_price_jpy - previous_price_jpy) * units
+            diff_pct = self._pct(current_price_jpy, previous_price_jpy)
+        else:
+            diff_val = float(price_metrics.get("diff_price", 0.0)) * fx_rate / _COMMODITY_OZ_TO_G * units
+            diff_pct = price_metrics.get("diff_pct")
         return {
             "date": price_metrics["date"],
             "price": price,
@@ -599,17 +735,34 @@ class UniversalIngester:
             "fx_date": fx_metrics.get("date"),
             "current_value_jpy": current_value,
             "diff_val_jpy": diff_val,
-            "diff_pct": price_metrics.get("diff_pct"),
+            "diff_pct": diff_pct,
             "wtd_pct": price_metrics.get("wtd_pct"),
             "mtd_pct": price_metrics.get("mtd_pct"),
             "ytd_pct": price_metrics.get("ytd_pct"),
         }
+
+    @staticmethod
+    def _previous_unit_value_jpy(
+        previous_price: Optional[float],
+        previous_fx: Optional[float],
+        divisor: float = 1.0,
+    ) -> Optional[float]:
+        """前日正本の値段と為替から、1単位あたりの円建て価値を求める。
+
+        どちらか一方でも欠けている場合は None を返し、呼び出し側は従来の
+        取得元ベースの計算へ戻す。v3.5 以前の台帳は資産別の為替を持たない。
+        """
+        if previous_price is None or previous_fx is None:
+            return None
+        value = float(previous_price) * float(previous_fx) / divisor
+        return value if value > 0 else None
 
     def _calculate_market_price(
         self,
         asset: Dict[str, Any],
         target_date: str,
         week_origin: Optional[str] = None,
+        previous_price: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         df_up = self._history_rows_up(asset["name"], "Date", target_date)
         if df_up is None or df_up.empty:
@@ -617,7 +770,7 @@ class UniversalIngester:
         latest = df_up.iloc[-1]
         prev = df_up.iloc[-2] if len(df_up) > 1 else latest
         close = float(latest["Close"])
-        prev_close = float(prev["Close"])
+        prev_close = previous_price if previous_price is not None else float(prev["Close"])
         return {
             "date": latest["Date"].strftime("%Y-%m-%d"),
             "price": close,

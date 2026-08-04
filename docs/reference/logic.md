@@ -87,7 +87,9 @@ ShadowLedger生成
 **確定ロジックの原則**
 
 - `DAY` は履歴 CSV の直近2点差分を直接使わない。
-- `DAY` は確定処理済み台帳内で freeze した差分を使う。
+- `DAY` は前営業日の確定台帳（出力の正本）を基準とする。前日側は値段と為替の両方を正本に記録された確定値で揃え、円建て評価額の変化として算出する（[ADR-0002](../adr/ADR-0002-ledger-native-ssot.md) / [ADR-0005](../adr/ADR-0005-target-date-us-market-date.md)）。
+- 数量は当日値のみを用いる。買い増しによる評価額増加は `DAY` へ混入しない。
+- 前営業日の正本が存在しない場合（正本の欠落区間、資産別の為替を持たない v3.5 以前の台帳）は、取得元履歴の前セッション比へフォールバックする。
 - 休日の国内資産は `DAY +0 / +0.00%` として freeze する。
 - `ABSOLUTE_AMOUNT` は常に `DAY +0 / +0.00%` とする。
 - renderer は履歴 CSV や市場履歴を再計算しない。
@@ -98,11 +100,12 @@ ShadowLedger生成
 | :--- | :--- | :--- |
 | `JP` | 日本休場日は `DAY 0` で freeze。営業日は直近営業日差分を採用。 | **実装済み** |
 | `STATIC` | 常に `DAY 0`。 | **実装済み** |
-| `US` | US 取引日を基準に freeze。日本休場日でも US 取引日なら `DAY` を維持する。 | **対象外**（現行スコープ外） |
-| `FX` / `COMMODITIES` | 各市場の取引可否を基準に freeze。市場休場なら `DAY 0`。 | **対象外**（現行スコープ外） |
+| `US` | 前営業日の正本を基準に算出。値段が前営業日と同じなら原資産騰落を再計上せず、為替だけ動いた場合は為替寄与を計上する。 | **実装済み** |
+| `FX` / `COMMODITIES` | 同上。値段も為替も動いていなければ `DAY 0`。 | **実装済み** |
 
-現時点の確定範囲は、JP 休場日における国内資産の `DAY` freeze と `ABSOLUTE_AMOUNT` の 0 確定までとする。
-`WTD` / `MTD` / `YTD` の追加確定や専用 Mail Dataset は後続の拡張対象であり、renderer は引き続き確定処理済み `ShadowLedger` を参照する。
+米国休場を挟んで複数の `target_date` が同じ `us_market_date` を参照する場合、移行前は同じ騰落率を再表示していたが、正本基準では再計上しない。
+
+`WTD` / `MTD` / `YTD` は取得元履歴の期間起点を基準とするため `DAY` の累計とは一致しない。正本基準への移行は期間起点となる確定台帳が連続して存在することを前提とし、ADR-0002 の Open items で扱う。renderer は引き続き確定処理済み `ShadowLedger` を参照する。
 
 **Legacy Daily Execution Flow (旧主系パイプライン)**
 | フェーズ | 状態チェック | アクション |
@@ -369,7 +372,7 @@ def get_us_market_context(self, jp_target_date: str) -> Dict[str, object]:
 | `target_date`（JP台帳対象日） | v4日次台帳に記録する日本時間基準の対象日。標準運用では 18:30 JST 以降に「当日」を対象にする。手動指定時は指定日をそのまま対象にする。旧主系など legacy 経路の省略時前営業日解決とは分離する。 | `V4Engine.run()` / `UniversalIngester.build_shadow_ledger()` |
 | `us_market_date`（US市場取引日） | `target_date - 1日` 以前で直近の NYSE 実取引日。通常は `target_date` の暦上の前日で、米国祝日・週末は前取引日にロールバックされる。標準実行帯の時刻によって再判定しない。 | `get_us_market_context()` の `trading_date` キー |
 | `calendar_date`（US暦日） | `target_date` の暦上の前日（US側）。`trading_date` との差異が NYSE 休場の有無を示す。 | `get_us_market_context()` の `calendar_date` キー |
-| 取引日と確定判定 | `trading_date` は対象セッションの日付、`source_date` は採用した原資産価格行の日付である。データの取得日時・更新日時とは分離する。必要な価格行と FX 行の期待日到達、および終値確認の結果は `pricing_status` で表す。 | `UniversalIngester._build_market_record()` |
+| 取引日と確定判定 | `trading_date` は対象セッションの日付、`source_date` は採用した原資産価格行の日付である。データの取得日時・更新日時とは分離する。ただし期待日の価格行が取得元に存在せず、前営業日の確定台帳から確定値を継承した場合は、`source_date` はその確定日を示す（[ADR-0002](../adr/ADR-0002-ledger-native-ssot.md)）。必要な価格行と FX 行の期待日到達、および終値確認の結果は `pricing_status` で表す。 | `UniversalIngester._build_market_record()` |
 | 米国休場日の扱い | 株価データは前取引日の値を引き継ぐ。AI プロンプトには `is_holiday=True` として注入され、存在しない市場変動へのハルシネーションを構造的に防止する。 | `get_us_market_context()` → `is_holiday` キー |
 | 境界時刻（JST） | 標準実行帯は **18:30〜20:00 JST**。最初の実行は 18:30、その後は 18:45 / 19:00 / 19:15 / 19:30 / 20:00 に再実行する。 | `../how-to/index.md §1.2 Routine Schedule` |
 | `manual_date` 指定時の注意 | 日本祝日を含む任意の日付を指定可能。v4 は legacy Freshness Guard の `STAGNANT` を使用しない。選択更新後も必要な価格または FX が期待日へ届かなければ `MISSING` / `STALE` の暫定配信とし、CompletionLock を記録しない。 | `V4Engine.run()` / `UniversalIngester.build_shadow_ledger()` |

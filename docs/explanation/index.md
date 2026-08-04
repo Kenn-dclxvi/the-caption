@@ -37,9 +37,12 @@ v2.0では、市場のボラティリティから投資家の精神的平穏（S
 
 v4.2 では、資産データの主従関係を反転した。旧来の証券会社サイトのスクレイピングは「日次レポートを動かすための必須入力」ではなく、正規台帳を監査するための従系である。
 
-* **SSOT A — Market Units**: `data/collection/market_units.csv`。株式、投資信託、コモディティ等の保有数を正典とする。
-* **SSOT B — Absolute Amounts**: `data/external_assets.json`。現金、企業型DC、その他外部資産の絶対額を正典とする。
-* **Canonical Ledger**: `UniversalIngester` が両SSOTを統合し、`ShadowLedger` (`data/v4_shadow_ledger.json`) を生成する。
+「正典」は計算元（評価の入力として何を信じるか）、「正本」は出力（確定した状態をどこが保持するか）を指す。両者は別レイヤーである（[ADR-0004](../adr/ADR-0004-collection-primary-v4.md) / [ADR-0002](../adr/ADR-0002-ledger-native-ssot.md)）。
+
+* **SSOT A — Market Units（計算元の正典）**: `data/collection/market_units.csv`。株式、投資信託、コモディティ等の保有数を正典とする。
+* **SSOT B — Absolute Amounts（計算元の正典）**: `data/external_assets.json`。現金、企業型DC、その他外部資産の絶対額を正典とする。
+* **統合結果**: `UniversalIngester` が両正典を統合し、`ShadowLedger` (`data/v4_shadow_ledger.json`) を生成する。同一実行内では下流（`daily_metrics` / 表示 / 配信）がこれを入力とする。
+* **Canonical Ledger（出力の正本）**: 日次で確定して保存する `data/current/ledger_YYYYMMDD.json`。週次/月次の参照先であり、翌営業日以降の `DAY` 比較の基準となる。
 * **Audit, not Dependency**: 監査層は外部総額との差分を観測するだけであり、取得失敗は `[AUDIT]` 警告として縮退する。
 
 この設計により、外部サイトのログイン失敗、メンテナンス、CSV仕様変更、画面DOM変更が 20:00 の日次配信を止める構造的リスクを排除する。
@@ -155,8 +158,9 @@ JP基準日の前日が米国市場の休場日（連邦祝日・週末）であ
 外部依存を断切、システム自身が正解を持つアーキテクチャ **(SSOT: Single Source of Truth)** を徹底します。
 
 1. **V4 Ledger Native Requirement**
-    * **Rule**: v4日次の資産データ参照先は、当日生成された `data/v4_shadow_ledger.json` を正（Canonical Ledger）とする。
-    * **Boundary**: `current/ledger_YYYYMMDD.json` は旧主系との互換変換のため維持されるが、v4標準日次の正典ではない。
+    * **Rule**: 出力の正本は日次で確定保存する `data/current/ledger_YYYYMMDD.json` とする。確定後の状態判定と期間比較はこの正本を基準に行う（[ADR-0002](../adr/ADR-0002-ledger-native-ssot.md)）。
+    * **Boundary**: `data/v4_shadow_ledger.json` は同一実行内で両正典を統合した結果であり、下流処理の入力として使う。日をまたぐ基準には使わない。
+    * **Immutability**: `integrity_status = VERIFIED` へ到達した正本は後続実行で書き換えない。`STAGNANT` の間は暫定として更新してよい。
 
 2. **The Fortress Equation (要塞の演算式)**
     * **Logic**: 総資産（Total Assets）は、常に以下の式で算出されなければならない。

@@ -743,3 +743,67 @@ def test_mutual_fund_is_not_subject_to_close_check(tmp_path):
     record = next(r for r in ledger.assets if r.name == "FundA")
     # MUTUAL_FUNDS with matching source_date are PRICED regardless of market open/close
     assert record.pricing_status == "PRICED"
+
+
+def test_previous_ledger_price_is_used_as_day_baseline():
+    # DAY 比較の基準は正本である前営業日の台帳価格であり、
+    # history CSV の末尾から2番目の行ではない。
+    ingester = UniversalIngester()
+    asset = {"name": "Gold", "source_symbol": "GC=F", "asset_class": "COMMODITIES", "units": "1"}
+
+    assert ingester._previous_ledger_price(asset, {"GC=F": {"price": 4049.1}}) == 4049.1
+    assert ingester._previous_ledger_price(asset, {"Gold": {"price": 4049.1}}) == 4049.1
+    assert ingester._previous_ledger_price(asset, {"GC=F": {"price": 0.0}}) is None
+    assert ingester._previous_ledger_price(asset, {}) is None
+    assert ingester._previous_ledger_price(asset, None) is None
+
+
+def test_confirmed_value_is_inherited_only_from_matching_canonical_ledger():
+    # 期待日の価格が取得元に無いとき、前営業日に確定した正本の値を継承する。
+    ingester = UniversalIngester()
+    asset = {"name": "Gold", "source_symbol": "GC=F", "asset_class": "COMMODITIES", "units": "1"}
+    confirmed = {
+        "GC=F": {
+            "price": 4049.1,
+            "pricing_status": "PRICED",
+            "source_date": "2026-07-31",
+            "target_date": "2026-08-03",
+        }
+    }
+
+    # 正本の対象日が期待日以降 かつ 価格一致 → その確定日を継承する。
+    assert ingester._inheritable_confirmed_date(asset, confirmed, "2026-08-03", 4049.1) == "2026-08-03"
+
+    # 期待日が正本の対象日より新しい → 継承しない。
+    assert ingester._inheritable_confirmed_date(asset, confirmed, "2026-08-04", 4049.1) is None
+
+    # 取得元の価格が更新された → 確定時と根拠が違うので継承しない。
+    assert ingester._inheritable_confirmed_date(asset, confirmed, "2026-08-03", 4105.0) is None
+
+    # 正本側が未確定 → 継承しない。
+    stale = {"GC=F": dict(confirmed["GC=F"], pricing_status="STALE")}
+    assert ingester._inheritable_confirmed_date(asset, stale, "2026-08-03", 4049.1) is None
+
+    # 資産別の鮮度を持たない v3.5 台帳 → 継承しない。
+    legacy = {"GC=F": {"price": 4049.1, "target_date": "2026-08-03"}}
+    assert ingester._inheritable_confirmed_date(asset, legacy, "2026-08-03", 4049.1) is None
+
+
+def test_day_diff_follows_ledger_confirmed_fx_not_just_price():
+    # 値段だけを正本基準にすると為替が当日値のまま残り、評価額の変化を
+    # DAY が取りこぼす。前日側は値段と為替の両方を正本の確定値で揃える。
+    ingester = UniversalIngester()
+
+    # 値段据え置き・為替のみ下落 → 円建て単価は下がる。
+    prev_unit = ingester._previous_unit_value_jpy(4049.1, 160.183)
+    assert prev_unit is not None
+    assert round(prev_unit, 4) == round(4049.1 * 160.183, 4)
+
+    # コモディティはグラム換算を挟む。
+    prev_gram = ingester._previous_unit_value_jpy(4049.1, 160.183, divisor=31.1034768)
+    assert round(prev_gram, 6) == round(4049.1 * 160.183 / 31.1034768, 6)
+
+    # 為替が欠ける台帳（v3.5 以前）では従来計算へ戻すため None を返す。
+    assert ingester._previous_unit_value_jpy(4049.1, None) is None
+    assert ingester._previous_unit_value_jpy(None, 160.183) is None
+    assert ingester._previous_unit_value_jpy(4049.1, 0.0) is None

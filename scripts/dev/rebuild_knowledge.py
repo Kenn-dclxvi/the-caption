@@ -25,11 +25,56 @@ _DATE_PATTERN: Final[re.Pattern] = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 logger = setup_logger(__name__)
 
 
+def _fmt_pct(value) -> str:
+    return f"{float(value):+.2f}%" if isinstance(value, (int, float)) else "---"
+
+
+def _position_from_canonical_asset(asset: dict) -> Position:
+    """v4 の確定台帳 (ADR-0002) の資産レコードを表示用 Position へ変換する。
+
+    v4 の計算元に資産別取得原価は存在しないため、`acquisition_price` と損益は
+    評価額および 0 で埋める。表示・Knowledge 再構築はこれらを参照しない。
+    """
+    value_jpy = int(asset.get("value_jpy") or 0)
+    price = float(asset.get("price") or 0.0)
+    is_cash = asset.get("source") == "ABSOLUTE_AMOUNT" or asset.get("pricing_status") == "STATIC"
+    return Position(
+        id=str(asset.get("id") or asset.get("name") or ""),
+        name=str(asset.get("name") or ""),
+        raw_name=str(asset.get("name") or ""),
+        asset_class="SHORT_TERM" if is_cash else str(asset.get("asset_class") or ""),
+        category="CASH" if is_cash else "INVESTMENT",
+        quantity=float(asset.get("units") or 0.0),
+        unit_price=price,
+        current_price=price,
+        currency=str(asset.get("currency") or "JPY"),
+        value_jpy=value_jpy,
+        acquisition_price=value_jpy,
+        profit_loss=0,
+        profit_loss_pct=0.0,
+        prev_day_diff_jpy=int(round(float(asset.get("day_diff_jpy") or 0.0))),
+        prev_day_diff_pct=float(asset.get("day_diff_pct") or 0.0),
+        is_nisa=False,
+        is_specific=False,
+        wtd=_fmt_pct(asset.get("wtd_pct")),
+        mtd=_fmt_pct(asset.get("mtd_pct")),
+        ytd=_fmt_pct(asset.get("ytd_pct")),
+    )
+
+
+def _position_from_dict(asset: dict) -> Position:
+    # v3.5 以前の台帳は Position をそのまま dump しているため直接復元できる。
+    # v4 の正本は資産別原価を持たず別スキーマなので、変換経路を分ける。
+    if "prev_day_diff_jpy" in asset and "raw_name" in asset:
+        return Position(**asset)
+    return _position_from_canonical_asset(asset)
+
+
 def _ledger_from_dict(data: dict) -> Ledger:
     return Ledger(
         meta=LedgerMeta(**data["meta"]),
         summary=LedgerSummary(**data["summary"]),
-        assets=[Position(**a) for a in data["assets"]],
+        assets=[_position_from_dict(a) for a in data["assets"]],
     )
 
 
