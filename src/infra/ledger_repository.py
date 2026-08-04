@@ -36,13 +36,16 @@ class LedgerRepository:
         return None
 
     def save(self, ledger: Ledger, date_str: str) -> None:
+        self.save_document(ledger.to_dict(), date_str)
+
+    def save_document(self, document: Dict[str, Any], date_str: str) -> None:
         filename = self.__filename_for(date_str)
         save_path = os.path.join(DIR_CURRENT, filename)
         try:
             fd, tmp_path = tempfile.mkstemp(dir=DIR_CURRENT, suffix='.json.tmp')
             try:
                 with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                    json.dump(ledger.to_dict(), f, indent=2, ensure_ascii=False)
+                    json.dump(document, f, indent=2, ensure_ascii=False)
                 os.replace(tmp_path, save_path)
             except Exception:
                 try:

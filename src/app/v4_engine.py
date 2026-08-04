@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Final
 from zoneinfo import ZoneInfo
 
@@ -19,6 +19,7 @@ from src.domain.universal_ingester import UniversalIngester
 from src.infra.context_repository import ContextRepository
 from src.infra.daily_metrics_repository import DailyMetricsRepository
 from src.infra.knowledge_manager import KnowledgeManager
+from src.infra.ledger_repository import LedgerRepository
 from src.infra.mail_sender import MailSender
 from src.infra.market_data import MarketDataFetcher
 from src.infra.market_snapshot_repository import MarketSnapshotRepository
@@ -40,6 +41,9 @@ def _mask_smtp_to(addr: str | None) -> str:
 class V4PortfolioEngine:
     __REV: Final[str] = "Rev. 1"
     __SHADOW_OUTPUT: Final[str] = os.path.join(DATA_DIR, "v4_shadow_ledger.json")
+    # 連休を跨いで前営業日の正本へ届く範囲。これを超えて遡ると比較基準が古くなるため、
+    # 見つからない場合は history ベースの前日終値へフォールバックする。
+    __PREVIOUS_LEDGER_LOOKBACK_DAYS: Final[int] = 5
     __APPRAISAL_STATE_PATH: Final[str] = os.path.join(DATA_DIR, "runtime", "v4_appraisal_state.json")
 
     def __init__(self) -> None:
@@ -53,6 +57,7 @@ class V4PortfolioEngine:
         self.__finalizer = V4LedgerFinalizer(self.__timeline)
         self.__context_repo = ContextRepository()
         self.__daily_metrics_repo = DailyMetricsRepository()
+        self.__ledger_repo = LedgerRepository()
         self.__market_snapshot_repo = MarketSnapshotRepository()
         self.__knowledge_mgr = KnowledgeManager()
         self.__renderer = V4ContentRenderer()
@@ -104,7 +109,12 @@ class V4PortfolioEngine:
                 target_date=target_date_str,
                 us_market_date=trading_date,
             )
-            shadow_ledger = self.__ingester.run(target_date_str, units_mode="strict")
+            previous_records = self.__load_previous_ledger_records(target_date_str)
+            shadow_ledger = self.__ingester.run(
+                target_date_str,
+                units_mode="strict",
+                previous_records=previous_records,
+            )
             finalized_ledger = self.__finalizer.finalize(shadow_ledger)
             finalized_ledger = self.__retry_incomplete_market_pricing(
                 target_date=target_date_str,
@@ -127,6 +137,10 @@ class V4PortfolioEngine:
                 return False
 
             canonical_ledger = self.__adapter.to_legacy_ledger(finalized_ledger)
+            canonical_document = self.__adapter.to_canonical_document(finalized_ledger)
+            if not self.__persist_canonical_ledger(canonical_document, target_date_str):
+                logger.error(f"[Outcome] V4 canonical ledger persistence failed: {target_date_str}. Dispatch blocked.")
+                return False
             is_provisional = any(asset.pricing_status in ("MISSING", "STALE") for asset in finalized_ledger.assets)
             summary_vm = SummaryViewModel(canonical_ledger.summary)
             raw_asset_vms = [PositionViewModel(position) for position in canonical_ledger.assets]
@@ -203,8 +217,80 @@ class V4PortfolioEngine:
             us_market_date=us_market_date,
             only_assets=target_names,
         )
-        retried_ledger = self.__ingester.run(target_date, units_mode="strict")
+        retried_ledger = self.__ingester.run(
+            target_date,
+            units_mode="strict",
+            previous_records=self.__load_previous_ledger_records(target_date),
+        )
         return self.__finalizer.finalize(retried_ledger)
+
+    def __load_previous_ledger_records(self, target_date: str) -> dict[str, dict[str, Any]]:
+        # 台帳が存在する日はパイプラインが確定した営業日そのものなので、
+        # 市場カレンダーではなく正本の存在を辿って前営業日を決める。
+        try:
+            base = date.fromisoformat(target_date)
+        except ValueError:
+            return {}
+        for offset in range(1, self.__PREVIOUS_LEDGER_LOOKBACK_DAYS + 1):
+            previous_date = (base - timedelta(days=offset)).isoformat()
+            ledger = self.__ledger_repo.load(previous_date)
+            if not isinstance(ledger, dict):
+                continue
+            confirmed_date = (ledger.get("meta") or {}).get("target_date") or previous_date
+            records: dict[str, dict[str, Any]] = {}
+            for asset in ledger.get("assets") or []:
+                if not isinstance(asset, dict):
+                    continue
+                asset_id = asset.get("id")
+                # v4 の正本は `price`、v3.5 以前の台帳は `current_price` を持つ。
+                price = asset.get("price")
+                if not isinstance(price, (int, float)):
+                    price = asset.get("current_price")
+                if not isinstance(asset_id, str) or not isinstance(price, (int, float)) or price <= 0:
+                    continue
+                records[asset_id] = {
+                    "price": float(price),
+                    # v3.5 以前の台帳は資産別の鮮度を持たないため継承対象にしない。
+                    "pricing_status": asset.get("pricing_status"),
+                    "source_date": asset.get("source_date"),
+                    "target_date": confirmed_date,
+                }
+            logger.info(
+                f"[Parsing] Previous canonical ledger resolved: {confirmed_date} ({len(records)} priced assets)"
+            )
+            return records
+        logger.info(
+            f"[Guard] No canonical ledger within {self.__PREVIOUS_LEDGER_LOOKBACK_DAYS} days before "
+            f"{target_date}. Falling back to history-based previous close."
+        )
+        return {}
+
+    def __is_canonical_ledger_verified(self, target_date: str) -> bool:
+        existing = self.__ledger_repo.load(target_date)
+        if not isinstance(existing, dict):
+            return False
+        meta = existing.get("meta")
+        if not isinstance(meta, dict):
+            return False
+        return meta.get("integrity_status") == "VERIFIED"
+
+    def __persist_canonical_ledger(self, document: dict[str, Any], target_date: str) -> bool:
+        # 日次台帳は週次/月次が LedgerRepository.load で参照する正本。
+        # STALE を含む日は STAGNANT として保存し日次連続性を欠落させないが、
+        # VERIFIED へ到達した正本は確定とみなし後続実行で書き換えない。
+        try:
+            if self.__is_canonical_ledger_verified(target_date):
+                logger.info(
+                    f"[Guard] Canonical ledger already VERIFIED for {target_date}; preserving confirmed record."
+                )
+                return True
+            self.__ledger_repo.save_document(document, target_date)
+            status = (document.get("meta") or {}).get("integrity_status")
+            logger.info(f"[Outcome] V4 canonical ledger persisted: {target_date} ({status})")
+            return True
+        except Exception as exc:
+            logger.error(f"[AUDIT] Failed to persist canonical ledger for {target_date}: {exc}")
+            return False
 
     def __persist_finalized_shadow_ledger(self, shadow_ledger: Any) -> bool:
         try:
