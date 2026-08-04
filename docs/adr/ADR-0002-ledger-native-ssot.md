@@ -25,7 +25,7 @@
 
 - 用語は「計算元の正典（SSOT A / SSOT B）」と「出力の正本（Canonical Ledger）」を区別して用いる
 - 日次の確定台帳は `data/current/ledger_YYYYMMDD.json` として毎営業日保存する
-- 前日比（DAY）の基準は前営業日の確定台帳に記録された価格とし、取得元CSVの末尾行を基準にしない
+- 前日比（DAY）の基準は前営業日の確定台帳とし、取得元CSVの末尾行を基準にしない。前日側は値段と為替の両方を正本の確定値で揃え、円建て評価額の変化として算出する（[ADR-0005](./ADR-0005-target-date-us-market-date.md)）
 - `integrity_status = VERIFIED` へ到達した確定台帳は後続実行で書き換えない。`STAGNANT` の間は暫定として更新してよい
 - CSVは計算元の正典または取得ソースとしてのみ利用し、確定済み台帳の値を上書きする基準にしない
 - SSOT定義はReferenceで管理し、Appendixに置かない

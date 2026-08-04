@@ -262,6 +262,7 @@ class V4PortfolioEngine:
                 records[asset_id] = {
                     "price": float(price),
                     # v3.5 以前の台帳は資産別の鮮度を持たないため継承対象にしない。
+                    "fx_rate": asset.get("fx_rate"),
                     "pricing_status": asset.get("pricing_status"),
                     "source_date": asset.get("source_date"),
                     "target_date": confirmed_date,

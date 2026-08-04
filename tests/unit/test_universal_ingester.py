@@ -787,3 +787,23 @@ def test_confirmed_value_is_inherited_only_from_matching_canonical_ledger():
     # 資産別の鮮度を持たない v3.5 台帳 → 継承しない。
     legacy = {"GC=F": {"price": 4049.1, "target_date": "2026-08-03"}}
     assert ingester._inheritable_confirmed_date(asset, legacy, "2026-08-03", 4049.1) is None
+
+
+def test_day_diff_follows_ledger_confirmed_fx_not_just_price():
+    # 値段だけを正本基準にすると為替が当日値のまま残り、評価額の変化を
+    # DAY が取りこぼす。前日側は値段と為替の両方を正本の確定値で揃える。
+    ingester = UniversalIngester()
+
+    # 値段据え置き・為替のみ下落 → 円建て単価は下がる。
+    prev_unit = ingester._previous_unit_value_jpy(4049.1, 160.183)
+    assert prev_unit is not None
+    assert round(prev_unit, 4) == round(4049.1 * 160.183, 4)
+
+    # コモディティはグラム換算を挟む。
+    prev_gram = ingester._previous_unit_value_jpy(4049.1, 160.183, divisor=31.1034768)
+    assert round(prev_gram, 6) == round(4049.1 * 160.183 / 31.1034768, 6)
+
+    # 為替が欠ける台帳（v3.5 以前）では従来計算へ戻すため None を返す。
+    assert ingester._previous_unit_value_jpy(4049.1, None) is None
+    assert ingester._previous_unit_value_jpy(None, 160.183) is None
+    assert ingester._previous_unit_value_jpy(4049.1, 0.0) is None

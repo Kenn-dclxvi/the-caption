@@ -568,7 +568,13 @@ def test_previous_ledger_records_are_passed_to_ingester(harness):
         {
             "meta": {"target_date": "2026-04-24", "integrity_status": "VERIFIED"},
             "assets": [
-                {"id": "GC=F", "price": 4049.10009765625, "pricing_status": "PRICED", "source_date": "2026-04-23"},
+                {
+                    "id": "GC=F",
+                    "price": 4049.10009765625,
+                    "fx_rate": 160.18,
+                    "pricing_status": "PRICED",
+                    "source_date": "2026-04-23",
+                },
                 {"id": "NYFANG", "current_price": 90492.0},
                 {"id": "Cash", "price": 0.0},
             ],
@@ -582,6 +588,7 @@ def test_previous_ledger_records_are_passed_to_ingester(harness):
     records = mocks["ingester"].run.call_args.kwargs["previous_records"]
     assert records["GC=F"] == {
         "price": 4049.10009765625,
+        "fx_rate": 160.18,
         "pricing_status": "PRICED",
         "source_date": "2026-04-23",
         "target_date": "2026-04-24",
@@ -589,6 +596,8 @@ def test_previous_ledger_records_are_passed_to_ingester(harness):
     # v3.5 以前の台帳は資産別の鮮度を持たないため pricing_status は None のまま渡す。
     assert records["NYFANG"]["price"] == 90492.0
     assert records["NYFANG"]["pricing_status"] is None
+    # v3.5 以前の台帳は資産別の為替を持たないため、円建て比較へは進まない。
+    assert records["NYFANG"]["fx_rate"] is None
     assert "Cash" not in records
 
 

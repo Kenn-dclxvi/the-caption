@@ -402,6 +402,7 @@ class UniversalIngester:
             expected_source_date,
             fx_metrics,
             self._previous_ledger_price(asset, previous_records),
+            self._previous_ledger_fx(asset, previous_records),
         )
         if metrics is None:
             return ShadowAssetRecord(
@@ -557,6 +558,10 @@ class UniversalIngester:
         return None
 
     @staticmethod
+    def _positive_number(value: Any) -> Optional[float]:
+        return float(value) if isinstance(value, (int, float)) and value > 0 else None
+
+    @staticmethod
     def _previous_ledger_price(
         asset: Dict[str, Any],
         previous_records: Optional[Dict[str, Dict[str, Any]]],
@@ -565,10 +570,19 @@ class UniversalIngester:
         record = UniversalIngester._previous_ledger_record(asset, previous_records)
         if record is None:
             return None
-        price = record.get("price")
-        if isinstance(price, (int, float)) and price > 0:
-            return float(price)
-        return None
+        return UniversalIngester._positive_number(record.get("price"))
+
+    @staticmethod
+    def _previous_ledger_fx(
+        asset: Dict[str, Any],
+        previous_records: Optional[Dict[str, Dict[str, Any]]],
+    ) -> Optional[float]:
+        # 値段だけを正本基準にすると、為替が当日値のまま残って評価額の変化を
+        # DAY が取りこぼす。前日側は値段と為替の両方を正本の確定値で揃える。
+        record = UniversalIngester._previous_ledger_record(asset, previous_records)
+        if record is None:
+            return None
+        return UniversalIngester._positive_number(record.get("fx_rate"))
 
     def _calculate_market_asset(
         self,
@@ -578,12 +592,18 @@ class UniversalIngester:
         expected_source_date: str,
         fx_metrics: Optional[Dict[str, Any]],
         previous_price: Optional[float] = None,
+        previous_fx: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         if asset["asset_class"] == "MUTUAL_FUNDS":
+            # 投資信託は基準価額そのものが円建てのため為替の合わせ込みは不要。
             return self._calculate_fund_value(asset, target_date, expected_source_date, previous_price)
         if asset["asset_class"] == _COMMODITY_ASSET_CLASS:
-            return self._calculate_commodity_value(asset, target_date, us_market_date, fx_metrics, previous_price)
-        return self._calculate_stock_value(asset, target_date, expected_source_date, fx_metrics, previous_price)
+            return self._calculate_commodity_value(
+                asset, target_date, us_market_date, fx_metrics, previous_price, previous_fx
+            )
+        return self._calculate_stock_value(
+            asset, target_date, expected_source_date, fx_metrics, previous_price, previous_fx
+        )
 
     def _calculate_fund_value(
         self,
@@ -626,6 +646,7 @@ class UniversalIngester:
         price_target_date: str,
         fx_metrics: Optional[Dict[str, Any]],
         previous_price: Optional[float] = None,
+        previous_fx: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         # USD-denominated stocks use US market dates in the history CSV.
         # US Friday's close is first observed by the JP system on JP Monday
@@ -648,8 +669,18 @@ class UniversalIngester:
                 return None
             fx_rate = float(fx_metrics["price"])
 
-        current_value = float(price_metrics["price"]) * float(asset["units"]) * fx_rate
-        diff_val = float(price_metrics.get("diff_price", 0.0)) * float(asset["units"]) * fx_rate
+        units = float(asset["units"])
+        unit_value_jpy = float(price_metrics["price"]) * fx_rate
+        current_value = unit_value_jpy * units
+        previous_unit_value_jpy = self._previous_unit_value_jpy(previous_price, previous_fx)
+        if previous_unit_value_jpy is not None:
+            # 前日側も正本の確定値（値段と為替）で円建てに揃え、評価額の変化と
+            # DAY を一致させる。数量は当日値のみを使うため積立分は混入しない。
+            diff_val = (unit_value_jpy - previous_unit_value_jpy) * units
+            diff_pct = self._pct(unit_value_jpy, previous_unit_value_jpy)
+        else:
+            diff_val = float(price_metrics.get("diff_price", 0.0)) * units * fx_rate
+            diff_pct = price_metrics.get("diff_pct")
         return {
             "date": price_metrics["date"],
             "price": price_metrics["price"],
@@ -657,7 +688,7 @@ class UniversalIngester:
             "fx_date": fx_metrics.get("date") if asset["currency"] == "USD" and fx_metrics else None,
             "current_value_jpy": current_value,
             "diff_val_jpy": diff_val,
-            "diff_pct": price_metrics.get("diff_pct"),
+            "diff_pct": diff_pct,
             "wtd_pct": price_metrics.get("wtd_pct"),
             "mtd_pct": price_metrics.get("mtd_pct"),
             "ytd_pct": price_metrics.get("ytd_pct"),
@@ -670,6 +701,7 @@ class UniversalIngester:
         us_market_date: str,
         fx_metrics: Optional[Dict[str, Any]],
         previous_price: Optional[float] = None,
+        previous_fx: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         # Commodities (Gold, Silver, Platinum) are US-market traded; same JP-observation
         # lag as USD stocks — anchor WTD to JP target_date week boundary.
@@ -684,9 +716,18 @@ class UniversalIngester:
 
         price = float(price_metrics["price"])
         fx_rate = float(fx_metrics["price"])
+        units = float(asset["units"])
         current_price_jpy = price * fx_rate / _COMMODITY_OZ_TO_G
-        current_value = current_price_jpy * float(asset["units"])
-        diff_val = float(price_metrics.get("diff_price", 0.0)) * fx_rate / _COMMODITY_OZ_TO_G * float(asset["units"])
+        current_value = current_price_jpy * units
+        previous_price_jpy = self._previous_unit_value_jpy(
+            previous_price, previous_fx, divisor=_COMMODITY_OZ_TO_G
+        )
+        if previous_price_jpy is not None:
+            diff_val = (current_price_jpy - previous_price_jpy) * units
+            diff_pct = self._pct(current_price_jpy, previous_price_jpy)
+        else:
+            diff_val = float(price_metrics.get("diff_price", 0.0)) * fx_rate / _COMMODITY_OZ_TO_G * units
+            diff_pct = price_metrics.get("diff_pct")
         return {
             "date": price_metrics["date"],
             "price": price,
@@ -694,11 +735,27 @@ class UniversalIngester:
             "fx_date": fx_metrics.get("date"),
             "current_value_jpy": current_value,
             "diff_val_jpy": diff_val,
-            "diff_pct": price_metrics.get("diff_pct"),
+            "diff_pct": diff_pct,
             "wtd_pct": price_metrics.get("wtd_pct"),
             "mtd_pct": price_metrics.get("mtd_pct"),
             "ytd_pct": price_metrics.get("ytd_pct"),
         }
+
+    @staticmethod
+    def _previous_unit_value_jpy(
+        previous_price: Optional[float],
+        previous_fx: Optional[float],
+        divisor: float = 1.0,
+    ) -> Optional[float]:
+        """前日正本の値段と為替から、1単位あたりの円建て価値を求める。
+
+        どちらか一方でも欠けている場合は None を返し、呼び出し側は従来の
+        取得元ベースの計算へ戻す。v3.5 以前の台帳は資産別の為替を持たない。
+        """
+        if previous_price is None or previous_fx is None:
+            return None
+        value = float(previous_price) * float(previous_fx) / divisor
+        return value if value > 0 else None
 
     def _calculate_market_price(
         self,

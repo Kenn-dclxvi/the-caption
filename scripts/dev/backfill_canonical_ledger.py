@@ -56,6 +56,7 @@ def _previous_ledger_records(repo: LedgerRepository, date_str: str) -> dict:
                 continue
             records[asset_id] = {
                 "price": float(price),
+                "fx_rate": asset.get("fx_rate"),
                 "pricing_status": asset.get("pricing_status"),
                 "source_date": asset.get("source_date"),
                 "target_date": confirmed_date,
