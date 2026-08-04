@@ -7,7 +7,9 @@ LedgerRepository.load で参照する正本が 2026-04-24 以降存在しない�
 
 配信系には一切触れない: メール送信 / LLM / CompletionLock /
 v4_shadow_ledger.json / daily_metrics は対象外。
-既存の台帳ファイルは --force なしでは上書きしない。
+既存の台帳ファイルは --force なしでは上書きしない。確定済み (VERIFIED) の
+正本は ADR-0002 の不変性に従い、--overwrite-verified を明示しない限り
+--force でも置き換えない。
 """
 
 import argparse
@@ -82,11 +84,26 @@ def backfill(
     force: bool,
     dry_run: bool,
     pending: Optional[Dict[str, dict]] = None,
+    overwrite_verified: bool = False,
 ) -> int:
     target = _ledger_path(date_str)
+    repo = LedgerRepository()
     if os.path.exists(target) and not force:
         print(f"SKIP {date_str}: ledger already exists ({target})")
         return 0
+
+    if os.path.exists(target) and not overwrite_verified:
+        # 確定済みの正本は ADR-0002 の不変性に従い --force だけでは置き換えない。
+        # 取得元履歴は後日更新され得るため、--force の広い指定で確定結果を
+        # 黙って書き換えてしまう事故を防ぐ。
+        existing = repo.load(date_str)
+        status = (existing or {}).get("meta", {}).get("integrity_status") if isinstance(existing, dict) else None
+        if status == "VERIFIED":
+            print(
+                f"SKIP {date_str}: canonical ledger is VERIFIED. "
+                "Pass --overwrite-verified to replace a confirmed record."
+            )
+            return 0
 
     snapshot = snapshot_path(date_str)
     if not os.path.exists(snapshot):
@@ -96,7 +113,6 @@ def backfill(
         return 1
 
     timeline = TimelineController()
-    repo = LedgerRepository()
     shadow = UniversalIngester().run(
         date_str,
         units_mode="strict",
@@ -127,7 +143,12 @@ def backfill(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dates", nargs="+", help="対象日 (YYYY-MM-DD)。複数指定可。")
-    parser.add_argument("--force", action="store_true", help="既存の台帳を上書きする。")
+    parser.add_argument("--force", action="store_true", help="既存の台帳を上書きする（VERIFIED は保護される）。")
+    parser.add_argument(
+        "--overwrite-verified",
+        action="store_true",
+        help="確定済み (VERIFIED) の正本も置き換える。--force と併用する。",
+    )
     parser.add_argument("--dry-run", action="store_true", help="保存せず結果だけ表示する。")
     args = parser.parse_args()
 
@@ -139,7 +160,13 @@ def main() -> None:
 
     pending: Dict[str, dict] = {}
     for index, date_str in enumerate(dates):
-        if backfill(date_str, force=args.force, dry_run=args.dry_run, pending=pending):
+        if backfill(
+            date_str,
+            force=args.force,
+            dry_run=args.dry_run,
+            pending=pending,
+            overwrite_verified=args.overwrite_verified,
+        ):
             # 後続日は失敗した日を前営業日の正本として参照する。そのまま続けると
             # 取得元履歴や更に古い台帳を基準に保存し、失敗日を後で復元しても
             # 既存台帳は --force なしでは作り直されないため不整合が固定される。
