@@ -28,7 +28,7 @@ from src.infra.ledger_repository import LedgerRepository
 from src.lib.timeline_controller import TimelineController
 
 
-_PREVIOUS_LEDGER_LOOKBACK_DAYS = 5
+_PREVIOUS_LEDGER_LOOKBACK_DAYS = 12
 
 
 def _ledger_path(date_str: str) -> str:
@@ -112,8 +112,14 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="保存せず結果だけ表示する。")
     args = parser.parse_args()
 
+    # 後の日は前営業日の正本を DAY 基準に使うため、降順や順不同で渡されると
+    # 先行日が未生成のまま計算され history フォールバックへ落ちる。昇順に固定する。
+    dates = sorted(set(args.dates))
+    if dates != list(args.dates):
+        print(f"NOTE ordering normalized to ascending: {' '.join(dates)}")
+
     failures = 0
-    for date_str in args.dates:
+    for date_str in dates:
         failures += backfill(date_str, force=args.force, dry_run=args.dry_run)
     sys.exit(1 if failures else 0)
 

@@ -601,6 +601,29 @@ def test_missing_previous_ledger_falls_back_to_history(harness):
     assert mocks["ingester"].run.call_args.kwargs["previous_records"] == {}
 
 
+def test_format_test_does_not_finalize_canonical_ledger(harness):
+    # レンダリング確認で正本を確定させると、後続の本番実行が VERIFIED を尊重して
+    # 上書きを拒否し、実データが正本へ入らなくなる。
+    engine, mocks = harness
+
+    engine.run(target_date="2026-04-25", format_test=True)
+
+    mocks["ledger_repo"].save_document.assert_not_called()
+
+
+def test_forced_rerun_warns_when_recomputed_total_diverges(harness):
+    engine, mocks = harness
+    mocks["ledger_repo"].load.return_value = {
+        "meta": {"target_date": "2026-04-25", "integrity_status": "VERIFIED"},
+        "summary": {"total_assets_jpy": 999},
+        "assets": [],
+    }
+
+    assert engine.run(target_date="2026-04-25", force_send=True) is True
+
+    mocks["ledger_repo"].save_document.assert_not_called()
+
+
 def test_verified_canonical_ledger_is_never_overwritten(harness):
     engine, mocks = harness
     mocks["ledger_repo"].load.return_value = {
