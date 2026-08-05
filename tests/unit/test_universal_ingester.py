@@ -5,6 +5,7 @@ import pytest
 
 from src.domain.universal_ingester import CanonicalLedgerInputError, UniversalIngester
 from src.infra.market_data import is_market_closed
+from src.infra.canonical_ledger_input_repository import CanonicalLedgerInputRepository
 
 _CLOSED = lambda asset_class, symbol, target_date: True
 _OPEN = lambda asset_class, symbol, target_date: False
@@ -76,6 +77,7 @@ def test_required_ssot_failure_preserves_previous_canonical_ledger(tmp_path, fai
         external_assets_path=str(external_json),
         history_dir=str(history_dir),
         is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository(),
     )
 
     with pytest.raises(CanonicalLedgerInputError):
@@ -104,6 +106,7 @@ def test_canonical_ledger_atomic_replace_failure_preserves_previous_file(tmp_pat
         external_assets_path=str(external_json),
         history_dir=str(history_dir),
         is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository(),
     )
 
     with patch("src.lib.atomic_write.os.replace", side_effect=OSError("replace failed")):
@@ -131,6 +134,7 @@ def test_minimal_documented_ssot_a_schema_uses_existing_defaults(tmp_path):
         external_assets_path=str(external_json),
         history_dir=str(history_dir),
         is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository(),
     ).build_shadow_ledger("2026-04-20")
 
     assert len(ledger.assets) == 1
@@ -166,6 +170,7 @@ def test_ssot_b_rejects_out_of_range_month_keys(tmp_path, invalid_month_key):
             external_assets_path=str(external_json),
             history_dir=str(history_dir),
             is_closed_fn=is_market_closed,
+            input_store=CanonicalLedgerInputRepository(),
         ).build_shadow_ledger("2026-04-20")
 
 
@@ -214,6 +219,7 @@ def test_build_shadow_ledger_merges_market_units_and_absolute_amounts(tmp_path):
         portfolio_basis_path=str(portfolio_basis_json),
         history_dir=str(history_dir),
         is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository(),
     ).build_shadow_ledger("2026-04-25")
 
     values = {record.name: record.current_value_jpy for record in ledger.assets}
@@ -261,6 +267,7 @@ def test_fund_diff_is_nonzero_when_source_date_matches_target_date(tmp_path):
         external_assets_path=str(external_json),
         history_dir=str(history_dir),
         is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository(),
     ).build_shadow_ledger("2026-04-20")
 
     record = next(r for r in ledger.assets if r.name == "FundA")
@@ -290,6 +297,7 @@ def test_external_assets_falls_back_to_default(tmp_path):
         external_assets_path=str(external_json),
         history_dir=str(history_dir),
         is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository(),
     ).build_shadow_ledger("2026-04-25")
 
     values = {record.name: record.current_value_jpy for record in ledger.assets}
@@ -315,6 +323,7 @@ def test_jp_stock_is_marked_stale_when_source_date_is_previous_day(tmp_path):
         external_assets_path=str(external_json),
         history_dir=str(history_dir),
         is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository(),
     )
     ingester._resolve_us_market_date = lambda _target: "2026-05-21"  # type: ignore[method-assign]
     ledger = ingester.build_shadow_ledger("2026-05-22")
@@ -359,6 +368,7 @@ def test_jp_assets_use_previous_business_date_on_holiday(tmp_path):
         history_dir=str(history_dir),
         timeline=timeline,
         is_closed_fn=close_check,
+        input_store=CanonicalLedgerInputRepository(),
     ).build_shadow_ledger("2026-07-20")
 
     records = {record.name: record for record in ledger.assets}
@@ -394,6 +404,7 @@ def test_jp_asset_older_than_previous_business_date_stays_stale_on_holiday(tmp_p
         history_dir=str(history_dir),
         timeline=timeline,
         is_closed_fn=close_check,
+        input_store=CanonicalLedgerInputRepository(),
     ).build_shadow_ledger("2026-07-20")
 
     record = next(record for record in ledger.assets if record.name == "BestAI")
@@ -424,6 +435,7 @@ def test_us_stock_is_marked_stale_when_fx_date_is_previous_to_us_market_date(tmp
         external_assets_path=str(external_json),
         history_dir=str(history_dir),
         is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository(),
     )
     ingester._resolve_us_market_date = lambda _target: "2026-05-21"  # type: ignore[method-assign]
     ledger = ingester.build_shadow_ledger("2026-05-22")
@@ -456,6 +468,7 @@ def test_us_stock_is_missing_when_fx_metrics_unavailable(tmp_path):
         external_assets_path=str(external_json),
         history_dir=str(history_dir),
         is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository(),
     )
     ingester._resolve_us_market_date = lambda _target: "2026-05-21"  # type: ignore[method-assign]
     ledger = ingester.build_shadow_ledger("2026-05-22")
@@ -486,6 +499,7 @@ def test_commodity_is_marked_stale_when_fx_date_is_previous_to_us_market_date(tm
         external_assets_path=str(external_json),
         history_dir=str(history_dir),
         is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository(),
     )
     ingester._resolve_us_market_date = lambda _target: "2026-05-21"  # type: ignore[method-assign]
     ledger = ingester.build_shadow_ledger("2026-05-22")
@@ -517,6 +531,7 @@ def test_portfolio_basis_falls_back_to_default(tmp_path):
         portfolio_basis_path=str(portfolio_basis_json),
         history_dir=str(history_dir),
         is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository(),
     ).build_shadow_ledger("2026-04-25")
 
     assert ledger.basis_active_key == "default"
@@ -542,6 +557,7 @@ def _make_jp_stock_ingester(tmp_path, *, is_closed_fn):
         external_assets_path=str(external_json),
         history_dir=str(history_dir),
         is_closed_fn=is_closed_fn,
+        input_store=CanonicalLedgerInputRepository(),
     )
     ingester._resolve_us_market_date = lambda _target: "2026-05-28"  # type: ignore[method-assign]
     return ingester
@@ -588,6 +604,7 @@ def test_past_date_is_priced_regardless_of_market_open(tmp_path):
         external_assets_path=str(external_json),
         history_dir=str(history_dir),
         is_closed_fn=is_closed_past_aware,
+        input_store=CanonicalLedgerInputRepository(),
     )
     ingester._resolve_us_market_date = lambda _target: "2026-04-20"  # type: ignore[method-assign]
     ledger = ingester.build_shadow_ledger("2026-04-20")
@@ -650,6 +667,7 @@ def _build_us_stock_record(tmp_path, *, history_csv, target_date, us_market_date
         external_assets_path=str(external_json),
         history_dir=str(history_dir),
         is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository(),
     )
     ingester._resolve_us_market_date = lambda _target: us_market_date  # type: ignore[method-assign]
     ledger = ingester.build_shadow_ledger(target_date)
@@ -725,6 +743,7 @@ def test_commodity_mtd_equals_wtd_when_month_starts_on_monday(tmp_path):
         external_assets_path=str(external_json),
         history_dir=str(history_dir),
         is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository(),
     )
     ingester._resolve_us_market_date = lambda _target: "2025-12-03"  # type: ignore[method-assign]
     ledger = ingester.build_shadow_ledger("2025-12-04")
@@ -750,7 +769,8 @@ def test_mutual_fund_is_not_subject_to_close_check(tmp_path):
         funds_csv_path=str(funds_csv),
         external_assets_path=str(external_json),
         history_dir=str(history_dir),
-        is_closed_fn=_OPEN,  # market "open" — should not affect MUTUAL_FUNDS
+        is_closed_fn=_OPEN,  # market "open" — should not affect MUTUAL_FUNDS,
+        input_store=CanonicalLedgerInputRepository(),
     )
     ingester._resolve_us_market_date = lambda _target: "2026-05-28"  # type: ignore[method-assign]
     ledger = ingester.build_shadow_ledger("2026-05-28")
@@ -762,7 +782,8 @@ def test_mutual_fund_is_not_subject_to_close_check(tmp_path):
 def test_previous_ledger_price_is_used_as_day_baseline():
     # DAY 比較の基準は正本である前営業日の台帳価格であり、
     # history CSV の末尾から2番目の行ではない。
-    ingester = UniversalIngester(is_closed_fn=is_market_closed)
+    ingester = UniversalIngester(is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository())
     asset = {"name": "Gold", "source_symbol": "GC=F", "asset_class": "COMMODITIES", "units": "1"}
 
     assert ingester._previous_ledger_price(asset, {"GC=F": {"price": 4049.1}}) == 4049.1
@@ -774,7 +795,8 @@ def test_previous_ledger_price_is_used_as_day_baseline():
 
 def test_confirmed_value_is_inherited_only_from_matching_canonical_ledger():
     # 期待日の価格が取得元に無いとき、前営業日に確定した正本の値を継承する。
-    ingester = UniversalIngester(is_closed_fn=is_market_closed)
+    ingester = UniversalIngester(is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository())
     asset = {"name": "Gold", "source_symbol": "GC=F", "asset_class": "COMMODITIES", "units": "1"}
     confirmed = {
         "GC=F": {
@@ -806,7 +828,8 @@ def test_confirmed_value_is_inherited_only_from_matching_canonical_ledger():
 def test_day_diff_follows_ledger_confirmed_fx_not_just_price():
     # 値段だけを正本基準にすると為替が当日値のまま残り、評価額の変化を
     # DAY が取りこぼす。前日側は値段と為替の両方を正本の確定値で揃える。
-    ingester = UniversalIngester(is_closed_fn=is_market_closed)
+    ingester = UniversalIngester(is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository())
 
     # 値段据え置き・為替のみ下落 → 円建て単価は下がる。
     prev_unit = ingester._previous_unit_value_jpy(4049.1, 160.183)

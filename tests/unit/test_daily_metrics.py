@@ -7,6 +7,7 @@ from src.domain.ledger_schema import ShadowAssetRecord, ShadowLedger
 from src.domain.shadow_ledger_adapter import ShadowLedgerAdapter
 from src.domain.universal_ingester import UniversalIngester
 from src.infra.market_data import is_market_closed
+from src.infra.canonical_ledger_input_repository import CanonicalLedgerInputRepository
 
 
 def test_build_daily_metrics_separates_sources_and_counts_missing():
@@ -129,6 +130,7 @@ def _make_wtd_fund_ingester(tmp_path):
         external_assets_path=str(external_json),
         history_dir=str(history_dir),
         is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository(),
     )
     return ingester
 
@@ -244,6 +246,7 @@ def _make_wtd_stock_ingester(tmp_path, max_us_date: str):
         external_assets_path=str(external_json),
         history_dir=str(history_dir),
         is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository(),
     )
 
 

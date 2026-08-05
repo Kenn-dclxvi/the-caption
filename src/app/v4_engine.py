@@ -20,6 +20,7 @@ from src.infra.context_repository import ContextRepository
 from src.infra.daily_metrics_repository import DailyMetricsRepository
 from src.infra.knowledge_manager import KnowledgeManager
 from src.infra.ledger_repository import LedgerRepository
+from src.infra.canonical_ledger_input_repository import CanonicalLedgerInputRepository
 from src.infra.mail_sender import MailSender
 from src.infra.market_data import MarketDataFetcher, is_market_closed
 from src.infra.market_snapshot_repository import MarketSnapshotRepository
@@ -54,7 +55,8 @@ class V4PortfolioEngine:
         self.__timeline = TimelineController()
         self.__guard = GuardRail(self.__timeline)
         self.__history_updater = CollectionHistoryUpdater()
-        self.__ingester = UniversalIngester(is_closed_fn=is_market_closed)
+        self.__ingester = UniversalIngester(is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository())
         self.__adapter = ShadowLedgerAdapter()
         self.__finalizer = V4LedgerFinalizer(self.__timeline)
         self.__context_repo = ContextRepository()

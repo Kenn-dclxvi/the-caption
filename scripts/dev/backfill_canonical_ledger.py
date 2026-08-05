@@ -29,6 +29,7 @@ from src.domain.universal_ingester import UniversalIngester
 from src.domain.v4_ledger_finalizer import V4LedgerFinalizer
 from src.infra.ledger_repository import LedgerRepository
 from src.infra.market_data import is_market_closed
+from src.infra.canonical_ledger_input_repository import CanonicalLedgerInputRepository
 from src.lib.timeline_controller import TimelineController
 
 
@@ -114,7 +115,8 @@ def backfill(
         return 1
 
     timeline = TimelineController()
-    shadow = UniversalIngester(is_closed_fn=is_market_closed).run(
+    shadow = UniversalIngester(is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository()).run(
         date_str,
         units_mode="strict",
         previous_records=_previous_ledger_records(repo, date_str, pending),

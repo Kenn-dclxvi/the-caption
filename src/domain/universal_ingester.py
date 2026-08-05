@@ -14,6 +14,7 @@ from src.domain.market_units_snapshot import (
     MarketUnitsSnapshotError,
     UnitsResolution,
 )
+from src.domain.ports import CanonicalLedgerInputStore
 # TODO(Phase 5): snapshot / CSV の読み出しを port 経由の注入へ置き換える。
 from src.infra.market_units_snapshot_repository import (
     load_market_units_csv,
@@ -60,6 +61,7 @@ class UniversalIngester:
         timeline: Optional[TimelineController] = None,
         *,
         is_closed_fn: Callable[[str, str, Optional[str]], bool],
+        input_store: CanonicalLedgerInputStore,
     ) -> None:
         logger.info(f"[{self.__REV}] Initializing UniversalIngester")
         self.funds_csv_path = funds_csv_path or MARKET_UNITS_CSV
@@ -70,6 +72,7 @@ class UniversalIngester:
         self.units_snapshot_dir = units_snapshot_dir
         self.timeline = timeline or TimelineController()
         self._is_closed_fn: Callable[[str, str, Optional[str]], bool] = is_closed_fn
+        self._input_store = input_store
 
     def build_shadow_ledger(
         self,
@@ -266,8 +269,7 @@ class UniversalIngester:
 
     def _load_external_assets(self, target_date: str) -> Tuple[List[Dict[str, Any]], str]:
         try:
-            with open(self.external_assets_path, "r", encoding="utf-8") as f:
-                payload = json.load(f)
+            payload = self._input_store.read_external_assets(self.external_assets_path)
         except FileNotFoundError as exc:
             raise CanonicalLedgerInputError(f"SSOT B missing: {self.external_assets_path}") from exc
         except Exception as exc:
@@ -301,16 +303,15 @@ class UniversalIngester:
         return [], "legacy/none"
 
     def _load_portfolio_basis(self, target_date: str) -> Tuple[Optional[str], Optional[float]]:
-        if not os.path.exists(self.portfolio_basis_path):
-            return None, None
-
         try:
-            with open(self.portfolio_basis_path, "r", encoding="utf-8") as f:
-                payload = json.load(f)
+            payload = self._input_store.read_portfolio_basis(self.portfolio_basis_path)
         except Exception as exc:
             logger.error(f"[Guard] Failed to read v4 portfolio basis: {exc}")
             return None, None
 
+        # 未配置は欠落として扱い、読み取り失敗と同じく基準なしへ倒す。
+        if payload is None:
+            return None, None
         if not isinstance(payload, dict):
             return None, None
 

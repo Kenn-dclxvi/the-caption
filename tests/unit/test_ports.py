@@ -5,11 +5,13 @@ import inspect
 import pytest
 
 from src.domain.ports import (
+    CanonicalLedgerInputStore,
     IntelligenceTransporter,
     LedgerReader,
     MarketContextReader,
     MonthlyInsightReader,
 )
+from src.infra.canonical_ledger_input_repository import CanonicalLedgerInputRepository
 from src.infra.knowledge_manager import KnowledgeManager
 from src.infra.ledger_repository import LedgerRepository
 from src.infra.llm_transporter import LlmTransporter
@@ -21,6 +23,8 @@ _PORT_IMPLEMENTATIONS = [
     (IntelligenceTransporter, LlmTransporter, "request_intelligence"),
     (MarketContextReader, MarketDataFetcher, "fetch_market_context"),
     (MonthlyInsightReader, KnowledgeManager, "extract_monthly_insights"),
+    (CanonicalLedgerInputStore, CanonicalLedgerInputRepository, "read_external_assets"),
+    (CanonicalLedgerInputStore, CanonicalLedgerInputRepository, "read_portfolio_basis"),
 ]
 
 

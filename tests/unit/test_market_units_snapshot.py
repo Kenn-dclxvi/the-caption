@@ -13,6 +13,7 @@ from src.infra.market_units_snapshot_repository import (
 )
 from src.domain.universal_ingester import UniversalIngester
 from src.infra.market_data import is_market_closed
+from src.infra.canonical_ledger_input_repository import CanonicalLedgerInputRepository
 
 
 def _write_market_units(path, rows: list[str] | None = None) -> None:
@@ -45,6 +46,7 @@ def _ingester(tmp_path, market_units_csv, snapshot_dir):
         history_dir=str(history_dir),
         units_snapshot_dir=str(snapshot_dir),
         is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository(),
     )
 
 
