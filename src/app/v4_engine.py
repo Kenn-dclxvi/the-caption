@@ -21,7 +21,7 @@ from src.infra.daily_metrics_repository import DailyMetricsRepository
 from src.infra.knowledge_manager import KnowledgeManager
 from src.infra.ledger_repository import LedgerRepository
 from src.infra.mail_sender import MailSender
-from src.infra.market_data import MarketDataFetcher
+from src.infra.market_data import MarketDataFetcher, is_market_closed
 from src.infra.market_snapshot_repository import MarketSnapshotRepository
 from src.lib.logger import setup_logger
 from src.lib.atomic_write import atomic_write_json
@@ -54,7 +54,7 @@ class V4PortfolioEngine:
         self.__timeline = TimelineController()
         self.__guard = GuardRail(self.__timeline)
         self.__history_updater = CollectionHistoryUpdater()
-        self.__ingester = UniversalIngester()
+        self.__ingester = UniversalIngester(is_closed_fn=is_market_closed)
         self.__adapter = ShadowLedgerAdapter()
         self.__finalizer = V4LedgerFinalizer(self.__timeline)
         self.__context_repo = ContextRepository()

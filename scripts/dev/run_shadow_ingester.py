@@ -7,6 +7,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from src.domain.universal_ingester import UniversalIngester
+from src.infra.market_data import is_market_closed
 
 
 def main() -> None:
@@ -19,7 +20,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    ledger = UniversalIngester().run(args.target_date, output_path=args.output)
+    ledger = UniversalIngester(is_closed_fn=is_market_closed).run(args.target_date, output_path=args.output)
 
     print(f"Wrote {args.output} ({len(ledger.assets)} assets, {ledger.total_value_jpy:,.0f} JPY)")
 

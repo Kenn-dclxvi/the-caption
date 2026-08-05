@@ -18,7 +18,6 @@ _US_CLOSE_TIME_JST = datetime.time(6, 30)
 # US market reopens around 23:30 JST (ET 09:30)
 _US_OPEN_TIME_JST = datetime.time(23, 30)
 
-CLOSE_CHECK_ASSET_CLASSES: Final[frozenset] = frozenset({"JP_STOCK", "US_STOCK", "COMMODITIES", "FX"})
 
 
 def is_market_closed(

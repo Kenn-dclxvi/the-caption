@@ -10,7 +10,6 @@ import pandas as pd
 
 from src.config.settings import DATA_DIR, DIR_COLLECTION_HISTORY, MARKET_UNITS_CSV
 from src.domain.ledger_schema import ShadowAssetRecord, ShadowLedger
-from src.infra.market_data import is_market_closed, CLOSE_CHECK_ASSET_CLASSES
 from src.domain.market_units_snapshot import (
     MarketUnitsSnapshotError,
     UnitsResolution,
@@ -39,6 +38,9 @@ _REQUIRED_SSOT_A_COLUMNS: Final[set[str]] = {
     "csv_url",
 }
 _EXTERNAL_MONTH_KEY_RE: Final[re.Pattern[str]] = re.compile(r"^\d{4}-(?:0[1-9]|1[0-2])$")
+# 終値確定チェックの対象。これ以外（MUTUAL_FUNDS 等）は場中の概念を持たないため
+# is_closed_fn へ渡さない。対象範囲はドメイン方針であり、判定手段の側に置かない。
+CLOSE_CHECK_ASSET_CLASSES: Final[frozenset] = frozenset({"JP_STOCK", "US_STOCK", "COMMODITIES", "FX"})
 
 
 class CanonicalLedgerInputError(ValueError):
@@ -56,7 +58,8 @@ class UniversalIngester:
         history_dir: Optional[str] = None,
         units_snapshot_dir: Optional[str] = None,
         timeline: Optional[TimelineController] = None,
-        is_closed_fn: Optional[Callable[[str, str, Optional[str]], bool]] = None,
+        *,
+        is_closed_fn: Callable[[str, str, Optional[str]], bool],
     ) -> None:
         logger.info(f"[{self.__REV}] Initializing UniversalIngester")
         self.funds_csv_path = funds_csv_path or MARKET_UNITS_CSV
@@ -66,7 +69,7 @@ class UniversalIngester:
         self.history_dir = history_dir or DIR_COLLECTION_HISTORY
         self.units_snapshot_dir = units_snapshot_dir
         self.timeline = timeline or TimelineController()
-        self._is_closed_fn: Callable[[str, str, Optional[str]], bool] = is_closed_fn or is_market_closed
+        self._is_closed_fn: Callable[[str, str, Optional[str]], bool] = is_closed_fn
 
     def build_shadow_ledger(
         self,
