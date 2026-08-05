@@ -25,6 +25,13 @@ _PORT_IMPLEMENTATIONS = [
     (MonthlyInsightReader, KnowledgeManager, "extract_monthly_insights"),
     (CanonicalLedgerInputStore, CanonicalLedgerInputRepository, "read_external_assets"),
     (CanonicalLedgerInputStore, CanonicalLedgerInputRepository, "read_portfolio_basis"),
+    (CanonicalLedgerInputStore, CanonicalLedgerInputRepository, "resolve_snapshot_path"),
+    (CanonicalLedgerInputStore, CanonicalLedgerInputRepository, "snapshot_exists"),
+    (CanonicalLedgerInputStore, CanonicalLedgerInputRepository, "read_units_snapshot"),
+    (CanonicalLedgerInputStore, CanonicalLedgerInputRepository, "read_market_units_columns"),
+    (CanonicalLedgerInputStore, CanonicalLedgerInputRepository, "read_market_units"),
+    (CanonicalLedgerInputStore, CanonicalLedgerInputRepository, "read_history_frame"),
+    (CanonicalLedgerInputStore, CanonicalLedgerInputRepository, "write_shadow_ledger"),
 ]
 
 

@@ -6,6 +6,11 @@
 - レビュー依頼前に `pytest tests/ -v` を実行する。
 - ローカルの pre-commit 期待値は、同じ `pytest tests/ -v` のベースラインと整合させて保つ。
 
+# conftest の settings スタブ
+
+- `tests/conftest.py` は `sys.modules["src.config.settings"]` を MagicMock へ差し替える。列挙されていない属性は文字列ではなく MagicMock になる。
+- `src/config/settings.py` へ定数を追加したら、同じ値を `conftest.py` へも登録する。未登録のパス定数が `open()` へ渡ると fd として解釈され、標準出力が閉じられてテスト全体が `OSError: [Errno 9] Bad file descriptor` で落ちる。テストの失敗ではなく pytest のクラッシュとして現れるため原因が追いにくい。
+
 # 実行環境
 
 - pytest は `.venv/bin/pytest` を使う。pre-commit も同じ `.venv` を優先するため、ベースラインを一致させる。

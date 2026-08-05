@@ -1,28 +1,23 @@
-import csv
-import json
 import math
-import os
 import re
 from datetime import datetime
 from typing import Any, Callable, Dict, Final, List, Literal, Optional, Tuple
 
 import pandas as pd
 
-from src.config.settings import DATA_DIR, DIR_COLLECTION_HISTORY, MARKET_UNITS_CSV
+from src.config.settings import (
+    DIR_COLLECTION_HISTORY,
+    EXTERNAL_ASSETS_JSON,
+    MARKET_UNITS_CSV,
+    PORTFOLIO_BASIS_JSON,
+)
 from src.domain.ledger_schema import ShadowAssetRecord, ShadowLedger
 from src.domain.market_units_snapshot import (
     MarketUnitsSnapshotError,
     UnitsResolution,
 )
 from src.domain.ports import CanonicalLedgerInputStore
-# TODO(Phase 5): snapshot / CSV の読み出しを port 経由の注入へ置き換える。
-from src.infra.market_units_snapshot_repository import (
-    load_market_units_csv,
-    load_units_snapshot,
-    snapshot_path,
-)
 from src.lib.logger import setup_logger
-from src.lib.atomic_write import atomic_write_json
 from src.lib.timeline_controller import TimelineController
 
 logger = setup_logger(__name__)
@@ -66,8 +61,8 @@ class UniversalIngester:
         logger.info(f"[{self.__REV}] Initializing UniversalIngester")
         self.funds_csv_path = funds_csv_path or MARKET_UNITS_CSV
         self.ssot_a_path = self.funds_csv_path
-        self.external_assets_path = external_assets_path or os.path.join(DATA_DIR, "external_assets.json")
-        self.portfolio_basis_path = portfolio_basis_path or os.path.join(DATA_DIR, "portfolio_basis.json")
+        self.external_assets_path = external_assets_path or EXTERNAL_ASSETS_JSON
+        self.portfolio_basis_path = portfolio_basis_path or PORTFOLIO_BASIS_JSON
         self.history_dir = history_dir or DIR_COLLECTION_HISTORY
         self.units_snapshot_dir = units_snapshot_dir
         self.timeline = timeline or TimelineController()
@@ -173,7 +168,7 @@ class UniversalIngester:
             previous_records=previous_records,
         )
         if output_path:
-            atomic_write_json(output_path, ledger.model_dump())
+            self._input_store.write_shadow_ledger(output_path, ledger.model_dump())
         return ledger
 
     def _resolve_market_units(
@@ -186,10 +181,12 @@ class UniversalIngester:
         if units_mode not in {"daily", "strict"}:
             raise ValueError(f"units_mode must be 'daily' or 'strict', got: {units_mode}")
 
-        snapshot = snapshot_path(target_date, self.units_snapshot_dir)
-        if os.path.exists(snapshot):
+        snapshot = self._input_store.resolve_snapshot_path(target_date, self.units_snapshot_dir)
+        if self._input_store.snapshot_exists(snapshot):
             try:
-                snapshot_items = load_units_snapshot(snapshot, target_date, self.ssot_a_path)
+                snapshot_items = self._input_store.read_units_snapshot(
+                    snapshot, target_date, self.ssot_a_path
+                )
                 self._validate_market_items(snapshot_items, snapshot)
                 return {
                     "items": snapshot_items,
@@ -225,15 +222,13 @@ class UniversalIngester:
 
     def _load_fund_config(self) -> List[Dict[str, Any]]:
         try:
-            with open(self.ssot_a_path, newline="", encoding="utf-8") as handle:
-                reader = csv.DictReader(handle)
-                columns = set(reader.fieldnames or [])
+            columns = self._input_store.read_market_units_columns(self.ssot_a_path)
             missing_columns = sorted(_REQUIRED_SSOT_A_COLUMNS - columns)
             if missing_columns:
                 raise CanonicalLedgerInputError(
                     f"SSOT A missing required columns {missing_columns}: {self.ssot_a_path}"
                 )
-            funds = load_market_units_csv(self.ssot_a_path)
+            funds = self._input_store.read_market_units(self.ssot_a_path)
             self._validate_market_items(funds, self.ssot_a_path)
             return funds
         except CanonicalLedgerInputError:
@@ -794,20 +789,19 @@ class UniversalIngester:
         return df_up.iloc[-1]
 
     def _history_rows_up(self, asset_name: str, date_col: str, target_date: str) -> Optional[pd.DataFrame]:
-        hist_path = os.path.join(self.history_dir, f"{asset_name}.csv")
-        if not os.path.exists(hist_path):
-            return None
-
         try:
-            df = pd.read_csv(hist_path, parse_dates=[date_col])
-            df = df.sort_values(date_col).reset_index(drop=True)
-            df_up = df[df[date_col] <= pd.to_datetime(target_date)]
-            if df_up.empty:
-                return None
-            return df_up
+            df = self._input_store.read_history_frame(self.history_dir, asset_name, date_col)
         except Exception as exc:
             logger.warning(f"[Guard] Failed to read v4 history for {asset_name}: {exc}")
             return None
+        if df is None:
+            return None
+
+        # 対象日までの切り出しはドメイン判断のため domain 側に残す。
+        df_up = df[df[date_col] <= pd.to_datetime(target_date)]
+        if df_up.empty:
+            return None
+        return df_up
 
     def _period_base_value(
         self,

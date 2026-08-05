@@ -18,6 +18,11 @@ _mock_settings.DIR_ARCHIVE = "data/archive"
 _mock_settings.DIR_CURRENT = "data/current"
 _mock_settings.DIR_COLLECTION = "data/collection"
 _mock_settings.DIR_COLLECTION_HISTORY = "data/collection/history"
+# パス定数は実 settings と同じ値を与える。未登録のままだと MagicMock が
+# open() へ渡り、fd として解釈されて標準出力が閉じられる。
+_mock_settings.MARKET_UNITS_CSV = "data/collection/market_units.csv"
+_mock_settings.EXTERNAL_ASSETS_JSON = "data/external_assets.json"
+_mock_settings.PORTFOLIO_BASIS_JSON = "data/portfolio_basis.json"
 _mock_settings.LAST_SENT_FILE_COLLECTION = "data/last_sent_collection.txt"
 _mock_settings.LLM_PRIORITY_ORDER = ["claude", "google"]
 _mock_settings.CONTEXT_REPORT_THRESHOLD_PCT = 0.5
