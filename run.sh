@@ -180,7 +180,14 @@ else
   die "python executable not found (.venv/bin/python, python, python3)"
 fi
 
-target="${1:-v4}"
+# 位置パラメータを補ってから解決する。`${1:-v4}` で既定値を与えるだけでは、
+# 引数なしの実行が v4 分岐の `shift` に到達し、`set -euo pipefail` の下で
+# 終了ステータス 1 のまま停止する。
+if [[ $# -eq 0 ]]; then
+  set -- v4
+fi
+
+target="$1"
 module=""
 
 case "${target}" in
@@ -219,6 +226,7 @@ case "${target}" in
     ;;
   "")
     module="src.app.entrypoints.v4_daily_main"
+    shift
     ;;
   *)
     usage
