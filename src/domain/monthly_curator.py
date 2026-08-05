@@ -12,7 +12,7 @@ from src.config.prompts import (
     PROMPT_CHRONICLE_SYSTEM_V4,
     OUTPUT_SCHEMA_CHRONICLE_V4,
 )
-from src.app.renderer.view_models import SummaryViewModel
+from src.lib.models import LedgerSummary
 from src.domain.ledger_schema import ShadowLedger
 from src.infra.knowledge_manager import KnowledgeManager
 from src.lib.utils import SystemUtils
@@ -35,7 +35,7 @@ class MonthlyCurator:
         logger.info(f"[{self.__REV}] Initializing MonthlyCurator")
         self.__transporter = LlmTransporter()
 
-    def generate_monthly_chronicle(self, year_month: str, summary_vm: SummaryViewModel, insights: List[Dict[str, str]]) -> Optional[Dict[str, Any]]:
+    def generate_monthly_chronicle(self, year_month: str, summary: LedgerSummary, insights: List[Dict[str, str]]) -> Optional[Dict[str, Any]]:
         logger.info(f"[Parsing] Generating Monthly Chronicle for {year_month} with {len(insights)} records")
 
         if len(insights) < 10:
@@ -49,7 +49,7 @@ class MonthlyCurator:
         prompt = MONTHLY_CHRONICLE_REPORT.format(
             year_month=year_month,
             insight_stream=insight_stream_text,
-            safe_ratio=summary_vm.fmt_safe_ratio
+            safe_ratio=f"{summary.safe_ratio_pct:.1f}%"
         )
 
         return self.__execute_prompt(prompt)

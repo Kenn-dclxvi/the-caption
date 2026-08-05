@@ -1,7 +1,7 @@
 import json
 import os
 from datetime import datetime
-from typing import Final, Any, Optional
+from typing import Final, Any
 
 from src.config.settings import DATA_DIR, LAST_SENT_FILE_MONTHLY, VERSION, LLM_PRIORITY_ORDER, SMTP_TO
 from src.lib.logger import setup_logger
@@ -75,11 +75,10 @@ class MonthlyEngine:
             daily_metrics = self.__daily_metrics_repo.load_month(year_month)
             market_snapshots = self.__market_snapshot_repo.load_month(year_month)
 
-            summary_vm: Optional[SummaryViewModel]
+            summary: LedgerSummary
             if ledger_dict:
                 summary_dict = ledger_dict.get("summary", {})
                 summary = LedgerSummary(**summary_dict)
-                summary_vm = SummaryViewModel(summary)
             else:
                 if len(daily_metrics) < self.__V4_DAILY_METRICS_MIN_DAYS:
                     logger.error(
@@ -87,7 +86,8 @@ class MonthlyEngine:
                         f"({len(daily_metrics)}/{self.__V4_DAILY_METRICS_MIN_DAYS})."
                     )
                     return
-                summary_vm = self.__build_summary_vm_from_daily_metrics(daily_metrics)
+                summary = self.__build_summary_from_daily_metrics(daily_metrics)
+            summary_vm = SummaryViewModel(summary)
 
             narrative_data = None
             if reuse_context:
@@ -113,7 +113,7 @@ class MonthlyEngine:
                         f"({len(daily_metrics)}/{self.__V4_DAILY_METRICS_MIN_DAYS}); "
                         "falling back to legacy monthly chronicle."
                     )
-                    narrative_data = self.__curator.generate_monthly_chronicle(year_month, summary_vm, insights)
+                    narrative_data = self.__curator.generate_monthly_chronicle(year_month, summary, insights)
                 if narrative_data:
                     self.__chronicle_repo.save(narrative_data, year_month)
 
@@ -145,7 +145,7 @@ class MonthlyEngine:
             logger.info("[Recovery] Action: Inspect traceback above. Data integrity check recommended before re-run.")
             self.__notifier.system_alert(str(e), "SYSTEM_CRASH_MONTHLY")
 
-    def __build_summary_vm_from_daily_metrics(self, daily_metrics: list[dict[str, Any]]) -> SummaryViewModel:
+    def __build_summary_from_daily_metrics(self, daily_metrics: list[dict[str, Any]]) -> LedgerSummary:
         sorted_metrics = sorted(daily_metrics, key=lambda row: str(row.get("target_date", "")))
         start_metrics = sorted_metrics[0]
         end_metrics = sorted_metrics[-1]
@@ -188,7 +188,7 @@ class MonthlyEngine:
             safe_ratio_pct=safe_ratio_pct,
             damper_coef=damper_coef,
         )
-        return SummaryViewModel(summary)
+        return summary
 
     def __load_total_acquisition_cost(self, year_month: str) -> float | None:
         if not year_month:

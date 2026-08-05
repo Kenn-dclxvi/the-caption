@@ -82,7 +82,7 @@ class WeeklyEngine:
 
             if not narrative_data:
                 insights = self.__knowledge.extract_weekly_insights(year_week)
-                narrative_data = self.__curator.generate_weekly_chronicle(year_week, summary_vm, insights)
+                narrative_data = self.__curator.generate_weekly_chronicle(year_week, summary, insights)
                 if narrative_data:
                     self.__chronicle_repo.save(narrative_data, year_week)
 

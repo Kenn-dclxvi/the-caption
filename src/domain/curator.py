@@ -5,14 +5,13 @@ import datetime
 from typing import Optional, Dict, Any, List, Union, Final, Tuple
 
 from src.lib.logger import setup_logger
-from src.lib.models import Ledger
+from src.lib.models import Ledger, LedgerSummary, Position
 from src.lib.guard import INJECTION_PATTERNS as _INJECTION_PATTERNS
 from src.lib.utils import SystemUtils
 from src.domain.ledger_schema import ShadowLedger
 from src.infra.llm_transporter import LlmTransporter
 from src.infra.market_data import MarketDataFetcher
 from src.lib.timeline_controller import TimelineController
-from src.app.renderer.view_models import SummaryViewModel, PositionViewModel
 from src.config.settings import DATA_DIR
 from src.config.prompts import (
     CURATOR_EXHIBITION_REPORT,
@@ -31,6 +30,7 @@ _VALID_CASH_BUFFERS: Final[Tuple[str, ...]] = ("EFFECTIVE", "ADEQUATE", "THIN", 
 _VALID_STAGNATION_READINESS: Final[Tuple[str, ...]] = ("HIGH", "MEDIUM", "LOW", "UNKNOWN")
 _TECH_ASSET_CLASSES: Final[Tuple[str, ...]] = ("MUTUAL_FUNDS", "US_STOCK")
 _METAL_ASSET_CLASSES: Final[Tuple[str, ...]] = ("COMMODITIES",)
+_CASH_ASSET_CLASSES: Final[Tuple[str, ...]] = ("SHORT_TERM", "CASH_EQUIVALENTS")
 _MAX_VALIDATION_RETRIES: Final[int] = 3
 
 class MarketCurator:
@@ -55,11 +55,11 @@ class MarketCurator:
 
     def generate_context_report(self,
                                 target_date: str,
-                                summary_vm: SummaryViewModel,
-                                asset_vms: List[PositionViewModel],
+                                summary: LedgerSummary,
+                                assets: List[Position],
                                 ledger: Optional[Ledger] = None) -> Optional[Dict[str, Any]]:
         logger.info(f"[Parsing] generate_context_report for {target_date}")
-        return self.__generate_exhibition_report(target_date, summary_vm, asset_vms, ledger)
+        return self.__generate_exhibition_report(target_date, summary, assets, ledger)
 
     def _get_context_dates(self, target_date: str) -> Dict[str, Any]:
         us_ctx = self.__timeline.get_us_market_context(target_date)
@@ -238,9 +238,14 @@ class MarketCurator:
             return False, " | ".join(errors)
         return True, ""
 
-    def __generate_exhibition_report(self, target_date: str, summary_vm: SummaryViewModel, asset_vms: List[PositionViewModel], ledger: Optional[Ledger] = None) -> Optional[Dict[str, Any]]:
+    def __generate_exhibition_report(self, target_date: str, summary: LedgerSummary, assets: List[Position], ledger: Optional[Ledger] = None) -> Optional[Dict[str, Any]]:
         dates = self._get_context_dates(target_date)
-        diff_pct = SystemUtils.parse_pct_str(summary_vm.fmt_total_diff_pct)
+        # 表示書式を経た値をそのまま使う。生値へ替えると parse_pct_str の丸めが
+        # 外れ、テーマ判定の境界が動く。書式は View 側の定義と一致させる。
+        fmt_total_diff_pct = f"{summary.total_diff_pct:+.2f}%"
+        fmt_safe_ratio = f"{summary.safe_ratio_pct:.1f}%"
+        fmt_total_pl = f"{summary.capital_gain_jpy:+,}"
+        diff_pct = SystemUtils.parse_pct_str(fmt_total_diff_pct)
         theme, angle = self.__determine_exhibition_theme(diff_pct)
 
         gallery_items = []
@@ -277,15 +282,16 @@ class MarketCurator:
                         f"[ID: {asset_id}] {self.__sanitize_external(name)} | Share: {real_share:.1f}% | 単日騰落: {d_dict['diff_pct']:+.2f}%"
                     )
         else:
-            for a in asset_vms:
-                if a.is_cash: continue
-                if a.share_pct < 0.1: continue
-                gallery_items.append(f"[ID: {a.id}] {self.__sanitize_external(a.name)} | Share: {a.share_pct:.1f}% | 単日騰落: {a.fmt_diff_pct}")
+            for a in assets:
+                if a.asset_class in _CASH_ASSET_CLASSES: continue
+                if a.share < 0.1: continue
+                fmt_diff_pct = f"{a.prev_day_diff_pct:+.2f}%"
+                gallery_items.append(f"[ID: {a.id}] {self.__sanitize_external(a.name)} | Share: {a.share:.1f}% | 単日騰落: {fmt_diff_pct}")
                 if a.id not in id_data_map:
                     id_data_map[a.id] = {
                         "name": a.name,
-                        "share_pct": a.share_pct,
-                        "diff_pct": SystemUtils.parse_pct_str(a.fmt_diff_pct),
+                        "share_pct": a.share,
+                        "diff_pct": SystemUtils.parse_pct_str(fmt_diff_pct),
                         "wtd": a.wtd,
                     }
 
@@ -322,9 +328,9 @@ class MarketCurator:
             angle=angle,
             us_date=dates['us_full'],
             us_market_context=us_market_context,
-            total_diff_pct=summary_vm.fmt_total_diff_pct,
-            safe_ratio=summary_vm.fmt_safe_ratio,
-            total_return=summary_vm.fmt_total_pl,
+            total_diff_pct=fmt_total_diff_pct,
+            safe_ratio=fmt_safe_ratio,
+            total_return=fmt_total_pl,
             gallery_text=gallery_text,
             sys_tech_pct=sys_tech_pct,
             sys_metal_pct=sys_metal_pct
@@ -367,8 +373,8 @@ class MarketCurator:
 
         if result:
             result["meta"] = {
-                "safe_ratio": summary_vm.fmt_safe_ratio,
-                "total_return": summary_vm.fmt_total_pl,
+                "safe_ratio": fmt_safe_ratio,
+                "total_return": fmt_total_pl,
                 "date_label": dates['jp_label'],
                 "theme_code": theme
             }

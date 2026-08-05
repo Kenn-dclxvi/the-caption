@@ -14,6 +14,8 @@
   - `src/infra`: 外部 I/O と連携
   - `src/lib`: ドメイン所有を持たない共有ユーティリティ
 - 移行時は、大規模な書き換えより、挙動を保つ小さな移動を優先する。
+- `src/domain` から `src/app` を import しない。ViewModel は View 層の型であり、domain の signature へ現れない。domain へ渡す値は `src/lib/models` の `Ledger` / `LedgerSummary` / `Position` を使う。
+- domain が表示用の文字列を必要とする場合は、View の整形結果を受け取らず domain 側で組む。View と同じ書式を使う箇所は、書式が二重定義であることをコメントで残す。
 
 # 実行経路（`run.sh` と `python -m`）
 
