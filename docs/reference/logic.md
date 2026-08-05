@@ -31,6 +31,56 @@ v4.3 の日次処理は、外部CSVの鮮度ではなく `ShadowLedger` の評�
 ## 3. System Flow & CompletionLock
 執行エンジンはデータの状態のみに基づく「ステートレス・フロー」を採用する。
 
+**Data Flow (計算元の正典 → 出力の正本)**
+
+用語は [ADR-0002](../adr/ADR-0002-ledger-native-ssot.md) / [ADR-0004](../adr/ADR-0004-collection-primary-v4.md) に従い、**計算元の正典**（評価の入力として何を信じるか）と**出力の正本**（確定した状態をどこが保持するか）を区別する。`data/v4_shadow_ledger.json` は同一実行内の統合結果であり、出力の正本ではない。
+
+```text
+[計算元の正典]
+  data/collection/market_units.csv              SSOT A: 市場連動資産の保有数
+  data/external_assets.json                     SSOT B: 現金・外部資産の絶対額
+  data/current/collection_units_YYYYMMDD.json   日付別 Units 固定 snapshot（v4 daily では必須）
+
+[前営業日の出力の正本]
+  data/current/ledger_YYYYMMDD.json             DAY 基準・確定値継承の参照元
+          │
+          ▼
+  UniversalIngester.build_shadow_ledger(previous_records=...)
+          │  採用した Units 入力元は ShadowLedger.units_source に記録
+          ▼
+  ShadowLedger
+          │  V4LedgerFinalizer.finalize()
+          ▼
+  Finalized ShadowLedger  ──→  data/v4_shadow_ledger.json（実行内の統合結果）
+          │
+          │  GuardRail.should_dispatch_shadow_ledger(allow_missing=True)
+          ▼
+  ShadowLedgerAdapter.to_canonical_document()
+          │
+          ▼
+[出力の正本]
+  data/current/ledger_YYYYMMDD.json             integrity_status: VERIFIED / STAGNANT
+          │                                     週次・月次は LedgerRepository.load で参照
+          ▼
+  daily_metrics_YYYYMMDD.json / market_snapshot_YYYYMMDD.json
+          │
+          ▼
+  V4ContentRenderer（templates/v4_monolithic.html）→ MailSender
+          │
+          ▼
+  CompletionLock（全件確定時のみ更新）
+```
+
+**Data Flow の原則**
+
+- v4 daily は `units_mode="strict"` で実行し、Units snapshot の欠損・不正を blocking とする。当日実行は `ensure_units_snapshot(allow_create=True)` が snapshot を生成するが、過去日の再実行は既存 snapshot を要求し、`market_units.csv` へのフォールバックは行わない（`allow_create=False` で `MarketUnitsSnapshotError`）。
+- 通常配信では、正本の保存をメール送信より前に行う。`daily_metrics` / `market_snapshot` を正本より先に保存しない。
+- `-t`（format test）はこの順序の例外とする。正本を保存せず `daily_metrics` / `market_snapshot` のみ保存する。レンダリング確認で正本を確定させると、後続の本番実行が `VERIFIED` を尊重して上書きを拒否し、実データが正本へ入らなくなるためである。
+- `integrity_status` は `MISSING` / `STALE` を含む場合 `STAGNANT`、それ以外を `VERIFIED` とする（`ShadowLedgerAdapter`）。
+- `VERIFIED` へ到達した正本は後続実行で書き換えない。`-F` の再送では配信物が再計算値から生成されるため、確定値との差異は `[AUDIT]` 警告として記録し、正本側を保持する。
+- `STAGNANT` の間は暫定として更新してよい。
+- 前営業日の正本が lookback 期間内に存在しない場合は、取得元履歴の前セッション比へフォールバックする。
+
 **V4 Daily Execution Flow (Collection-Primary 日次パイプライン)**
 
 | フェーズ | 状態チェック | アクション |
