@@ -23,7 +23,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from src.config.settings import DIR_CURRENT
-from src.domain.market_units_snapshot import snapshot_path
+from src.infra.market_units_snapshot_repository import snapshot_path
 from src.domain.shadow_ledger_adapter import ShadowLedgerAdapter
 from src.domain.universal_ingester import UniversalIngester
 from src.domain.v4_ledger_finalizer import V4LedgerFinalizer

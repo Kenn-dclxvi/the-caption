@@ -8,13 +8,15 @@ from typing import Any, Callable, Dict, Final, List, Literal, Optional, Tuple
 
 import pandas as pd
 
-from src.config.settings import DATA_DIR, DIR_COLLECTION_HISTORY
+from src.config.settings import DATA_DIR, DIR_COLLECTION_HISTORY, MARKET_UNITS_CSV
 from src.domain.ledger_schema import ShadowAssetRecord, ShadowLedger
 from src.infra.market_data import is_market_closed, CLOSE_CHECK_ASSET_CLASSES
 from src.domain.market_units_snapshot import (
-    MARKET_UNITS_CSV,
     MarketUnitsSnapshotError,
     UnitsResolution,
+)
+# TODO(Phase 5): snapshot / CSV の読み出しを port 経由の注入へ置き換える。
+from src.infra.market_units_snapshot_repository import (
     load_market_units_csv,
     load_units_snapshot,
     snapshot_path,

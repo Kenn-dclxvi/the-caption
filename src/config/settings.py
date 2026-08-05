@@ -44,6 +44,8 @@ DIR_CURRENT: Final[str] = os.path.join(DATA_DIR, "current")
 
 DIR_COLLECTION: Final[str] = os.path.join(DATA_DIR, "collection")
 DIR_COLLECTION_HISTORY: Final[str] = os.path.join(DIR_COLLECTION, "history")
+# 市場連動資産の保有数の計算元の正典（SSOT A）。domain と infra の双方が参照する。
+MARKET_UNITS_CSV: Final[str] = os.path.join(DIR_COLLECTION, "market_units.csv")
 LAST_SENT_FILE_COLLECTION: Final[str] = os.path.join(DATA_DIR, "last_sent_collection.txt")
 DIR_PHASE1_COLLECTION: Final[str] = os.path.join(DATA_DIR, "phase1", "collection")
 

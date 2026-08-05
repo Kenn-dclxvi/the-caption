@@ -12,7 +12,7 @@ from src.config.settings import DATA_DIR, LAST_SENT_FILE_CURRENT, LLM_PRIORITY_O
 from src.domain.daily_metrics import build_daily_metrics, build_deterministic_daily_context
 from src.domain.collection_history_updater import CollectionHistoryUpdater
 from src.domain.guard_rail import GuardRail
-from src.domain.market_units_snapshot import ensure_units_snapshot
+from src.infra.market_units_snapshot_repository import ensure_units_snapshot
 from src.domain.shadow_ledger_adapter import ShadowLedgerAdapter
 from src.domain.v4_ledger_finalizer import V4LedgerFinalizer
 from src.domain.universal_ingester import UniversalIngester

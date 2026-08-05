@@ -3,9 +3,8 @@ from unittest.mock import patch
 
 import pytest
 
-from src.domain.market_units_snapshot import (
-    MarketUnitsSnapshotError,
-    build_asset_key,
+from src.domain.market_units_snapshot import MarketUnitsSnapshotError, build_asset_key
+from src.infra.market_units_snapshot_repository import (
     create_units_snapshot,
     ensure_units_snapshot,
     load_units_snapshot,
@@ -123,7 +122,7 @@ def test_ensure_snapshot_atomic_write_failure_leaves_no_target(tmp_path):
     _write_market_units(market_units_csv)
 
     with patch(
-        "src.domain.market_units_snapshot.atomic_write_json",
+        "src.infra.market_units_snapshot_repository.atomic_write_json",
         side_effect=OSError("disk full"),
     ), pytest.raises(OSError, match="disk full"):
         ensure_units_snapshot(
