@@ -19,6 +19,7 @@
 配信系には一切触れない: メール送信 / LLM / CompletionLock /
 v4_shadow_ledger.json / daily_metrics は対象外。
 確定済み (VERIFIED) の正本は --overwrite-verified を明示しない限り置き換えない。
+--overwrite-verified は --force を含意する。
 """
 
 import argparse
@@ -226,14 +227,20 @@ def backfill_day(
     pending: Dict[str, dict],
 ) -> int:
     target = _ledger_path(date_str)
-    if os.path.exists(target) and not force:
-        print(f"SKIP {date_str}: ledger already exists")
+    # --overwrite-verified は確定済みを置き換える明示的な意思表示なので、
+    # 既存台帳の上書き許可（--force）を含意する。
+    allow_overwrite = force or overwrite_verified
+    if os.path.exists(target) and not allow_overwrite:
+        print(f"SKIP {date_str}: ledger already exists. Use --force to rebuild.")
         return 0
     if os.path.exists(target) and not overwrite_verified:
         existing = repo.load(date_str)
         status = (existing or {}).get("meta", {}).get("integrity_status") if isinstance(existing, dict) else None
         if status == "VERIFIED":
-            print(f"SKIP {date_str}: ledger is VERIFIED (use --overwrite-verified)")
+            print(
+                f"SKIP {date_str}: ledger is VERIFIED. "
+                "Pass --overwrite-verified to replace a confirmed record."
+            )
             return 0
 
     summary_expected = day["summary"]
@@ -312,7 +319,11 @@ def main() -> None:
     parser.add_argument("dates", nargs="*", help="対象日 (YYYY-MM-DD)。省略時はアーカイブの全日。")
     parser.add_argument("--archive", default=_DEFAULT_ARCHIVE, help="レポート抽出データの JSON パス。")
     parser.add_argument("--force", action="store_true", help="既存の台帳を上書きする（VERIFIED は保護）。")
-    parser.add_argument("--overwrite-verified", action="store_true", help="確定済みの正本も置き換える。")
+    parser.add_argument(
+        "--overwrite-verified",
+        action="store_true",
+        help="確定済み (VERIFIED) の正本も置き換える（--force を含意する）。",
+    )
     parser.add_argument("--dry-run", action="store_true", help="保存せず照合結果だけ表示する。")
     args = parser.parse_args()
 

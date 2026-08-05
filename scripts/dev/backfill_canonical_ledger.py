@@ -9,7 +9,7 @@ LedgerRepository.load で参照する正本が 2026-04-24 以降存在しない�
 v4_shadow_ledger.json / daily_metrics は対象外。
 既存の台帳ファイルは --force なしでは上書きしない。確定済み (VERIFIED) の
 正本は ADR-0002 の不変性に従い、--overwrite-verified を明示しない限り
---force でも置き換えない。
+--force でも置き換えない。--overwrite-verified は --force を含意する。
 """
 
 import argparse
@@ -88,8 +88,11 @@ def backfill(
 ) -> int:
     target = _ledger_path(date_str)
     repo = LedgerRepository()
-    if os.path.exists(target) and not force:
-        print(f"SKIP {date_str}: ledger already exists ({target})")
+    # --overwrite-verified は確定済みを置き換える明示的な意思表示なので、
+    # 既存台帳の上書き許可（--force）を含意する。
+    allow_overwrite = force or overwrite_verified
+    if os.path.exists(target) and not allow_overwrite:
+        print(f"SKIP {date_str}: ledger already exists ({target}). Use --force to rebuild.")
         return 0
 
     if os.path.exists(target) and not overwrite_verified:
@@ -147,7 +150,7 @@ def main() -> None:
     parser.add_argument(
         "--overwrite-verified",
         action="store_true",
-        help="確定済み (VERIFIED) の正本も置き換える。--force と併用する。",
+        help="確定済み (VERIFIED) の正本も置き換える（--force を含意する）。",
     )
     parser.add_argument("--dry-run", action="store_true", help="保存せず結果だけ表示する。")
     args = parser.parse_args()
