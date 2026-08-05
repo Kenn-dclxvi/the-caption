@@ -359,26 +359,22 @@ class TestMonthlyGuardRail:
         from src.domain.monthly_guard import MonthlyGuardRail
 
         timeline = MagicMock()
-        repo = MagicMock()
         timeline.get_previous_month_last_business_day.return_value = "2026-01-31"
 
+        # MonthlyGuardRail は台帳を読まない。LedgerReader を受け取らないため、
+        # 読み出しが起きないことは signature で保証される。
         with patch("src.domain.monthly_guard.SystemUtils.get_flag", return_value="2025-12"):
-            guard = MonthlyGuardRail(timeline, repo)
+            guard = MonthlyGuardRail(timeline)
 
             assert guard.should_proceed("2026-02-28", force_send=False) is True
-
-        repo.load.assert_not_called()
 
     def test_monthly_lock_still_blocks_same_month(self):
         from src.domain.monthly_guard import MonthlyGuardRail
 
         timeline = MagicMock()
-        repo = MagicMock()
         timeline.get_previous_month_last_business_day.return_value = "2026-01-31"
 
         with patch("src.domain.monthly_guard.SystemUtils.get_flag", return_value="2026-01"):
-            guard = MonthlyGuardRail(timeline, repo)
+            guard = MonthlyGuardRail(timeline)
 
             assert guard.should_proceed("2026-02-28", force_send=False) is False
-
-        repo.load.assert_not_called()

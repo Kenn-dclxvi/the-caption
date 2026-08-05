@@ -40,7 +40,7 @@ class MonthlyEngine:
         self.__market_snapshot_repo = MarketSnapshotRepository()
         self.__timeline = TimelineController()
         self.__curator = MonthlyCurator()
-        self.__guard = MonthlyGuardRail(self.__timeline, self.__repo)
+        self.__guard = MonthlyGuardRail(self.__timeline)
         self.__chronicle_repo = ChronicleRepository()
 
     def run(self, **kwargs: Any) -> None:
