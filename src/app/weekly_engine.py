@@ -7,6 +7,7 @@ from src.lib.logger import setup_logger
 from src.app.notifier import Notifier
 from src.infra.ledger_repository import LedgerRepository
 from src.infra.knowledge_manager import KnowledgeManager
+from src.infra.llm_transporter import LlmTransporter
 from src.lib.timeline_controller import TimelineController
 from src.domain.weekly_curator import WeeklyCurator
 from src.domain.weekly_guard import WeeklyGuardRail
@@ -28,7 +29,7 @@ class WeeklyEngine:
         self.__repo = LedgerRepository()
         self.__knowledge = KnowledgeManager()
         self.__timeline = TimelineController()
-        self.__curator = WeeklyCurator()
+        self.__curator = WeeklyCurator(LlmTransporter())
         self.__guard = WeeklyGuardRail(self.__timeline, self.__repo)
         self.__chronicle_repo = ChronicleRepository()
 

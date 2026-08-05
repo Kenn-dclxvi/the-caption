@@ -15,6 +15,8 @@ from src.infra.context_repository import ContextRepository
 from src.domain.curator import MarketCurator
 from src.infra.knowledge_manager import KnowledgeManager
 from src.infra.ledger_repository import LedgerRepository
+from src.infra.llm_transporter import LlmTransporter
+from src.infra.market_data import MarketDataFetcher
 from src.lib.timeline_controller import TimelineController
 
 _TOOL_REV: Final[str] = "Rev. 1"
@@ -167,7 +169,7 @@ def main() -> None:
     print(f"[Batch] API delay: {args.delay}s per interval")
 
     timeline     = TimelineController()
-    curator      = MarketCurator(timeline)
+    curator      = MarketCurator(timeline, LlmTransporter(), MarketDataFetcher())
     context_repo = ContextRepository()
     knowledge_mgr = KnowledgeManager()
 

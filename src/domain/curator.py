@@ -9,8 +9,7 @@ from src.lib.models import Ledger, LedgerSummary, Position
 from src.lib.guard import INJECTION_PATTERNS as _INJECTION_PATTERNS
 from src.lib.utils import SystemUtils
 from src.domain.ledger_schema import ShadowLedger
-from src.infra.llm_transporter import LlmTransporter
-from src.infra.market_data import MarketDataFetcher
+from src.domain.ports import IntelligenceTransporter, MarketContextReader
 from src.lib.timeline_controller import TimelineController
 from src.config.settings import DATA_DIR
 from src.config.prompts import (
@@ -36,10 +35,15 @@ _MAX_VALIDATION_RETRIES: Final[int] = 3
 class MarketCurator:
     __REV: Final[str] = "Rev. 94"
 
-    def __init__(self, timeline: TimelineController) -> None:
+    def __init__(
+        self,
+        timeline: TimelineController,
+        transporter: IntelligenceTransporter,
+        market_fetcher: MarketContextReader,
+    ) -> None:
         logger.info(f"[{self.__REV}] Initializing MarketCurator")
-        self.__transporter = LlmTransporter()
-        self.__market_fetcher = MarketDataFetcher()
+        self.__transporter = transporter
+        self.__market_fetcher = market_fetcher
         self.__timeline = timeline
 
     def __sanitize_external(self, text: str) -> str:

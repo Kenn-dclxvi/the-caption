@@ -1,7 +1,7 @@
 import json
 import pytest
 from typing import Dict, List, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from src.lib.models import Ledger, LedgerMeta, LedgerSummary, Position
 
@@ -165,17 +165,15 @@ def curator_harness():
         "is_holiday":    False,
     }
 
-    with patch("src.domain.curator.LlmTransporter")      as MockTransporter, \
-         patch("src.domain.curator.MarketDataFetcher")   as MockFetcher:
+    # infra は注入されるため patch は不要。port を満たす Mock を直接渡す。
+    mock_transporter = MagicMock()
+    mock_fetcher     = MagicMock()
+    mock_fetcher.fetch_market_context.return_value = "S&P500: +0.5%"
 
-        mock_transporter = MockTransporter.return_value
-        mock_fetcher     = MockFetcher.return_value
-        mock_fetcher.fetch_market_context.return_value = "S&P500: +0.5%"
+    from src.domain.curator import MarketCurator
+    curator = MarketCurator(mock_timeline, mock_transporter, mock_fetcher)
 
-        from src.domain.curator import MarketCurator
-        curator = MarketCurator(mock_timeline)
-
-        yield curator, mock_transporter, mock_timeline
+    yield curator, mock_transporter, mock_timeline
 
 
 def _make_summary(diff_pct: float = -0.50) -> LedgerSummary:
