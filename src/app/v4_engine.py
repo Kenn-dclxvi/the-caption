@@ -10,7 +10,7 @@ from src.app.renderer.v4_view_models import V4MonolithicViewModel
 from src.app.renderer.view_models import PositionViewModel, SummaryViewModel
 from src.config.settings import DATA_DIR, LAST_SENT_FILE_CURRENT, LLM_PRIORITY_ORDER, SMTP_TO, VERSION
 from src.domain.daily_metrics import build_daily_metrics, build_deterministic_daily_context
-from src.domain.collection_history_updater import CollectionHistoryUpdater
+from src.infra.collection_history_updater import CollectionHistoryUpdater
 from src.domain.guard_rail import GuardRail
 from src.infra.market_units_snapshot_repository import ensure_units_snapshot
 from src.domain.shadow_ledger_adapter import ShadowLedgerAdapter

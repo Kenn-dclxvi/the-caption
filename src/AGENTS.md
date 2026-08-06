@@ -8,6 +8,7 @@
 - 設定とプロンプトは `src/config/` 配下を正規とする。
 - 共有の logger / models / utils は `src/lib/` 配下を正規とする。
 - `common/` / `config/` / `modules/` などのレガシー互換ルートやルートエントリポイント shim を再導入しない。
+- レイヤー分離と依存の向きは [ADR-0007](../docs/adr/ADR-0007-layer-separation-and-ports.md) を正本とする。
 - 責務はレイヤーごとに分割を保つ。
   - `src/app`: オーケストレーションとエントリ向けアプリケーションサービス
   - `src/domain`: 純粋なビジネス・ドメインロジック

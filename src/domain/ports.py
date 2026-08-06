@@ -89,6 +89,22 @@ class CanonicalLedgerInputStore(Protocol):
 
 
 @runtime_checkable
+class ShadowLedgerHistoryStore(Protocol):
+    """月次が参照する ShadowLedger 履歴の探索と読み出し。
+
+    実装は `ShadowLedgerHistoryRepository`。検証と月の絞り込みは domain 側で行う。
+    """
+
+    def discover_shadow_ledger_paths(self) -> List[str]:
+        """ShadowLedger 履歴のパスを昇順で返す。"""
+        ...
+
+    def read_shadow_ledger(self, path: str) -> Any:
+        """ShadowLedger の payload を返す。読めない場合は例外を送出する。"""
+        ...
+
+
+@runtime_checkable
 class MonthlyInsightReader(Protocol):
     """月次 Insight の抽出。実装は `KnowledgeManager`。"""
 
