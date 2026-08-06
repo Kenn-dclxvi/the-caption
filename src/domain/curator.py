@@ -1,4 +1,3 @@
-import os
 import json
 import re
 import datetime
@@ -11,7 +10,6 @@ from src.lib.utils import SystemUtils
 from src.domain.ledger_schema import ShadowLedger
 from src.domain.ports import IntelligenceTransporter, MarketContextReader
 from src.lib.timeline_controller import TimelineController
-from src.config.settings import DATA_DIR
 from src.config.prompts import (
     CURATOR_EXHIBITION_REPORT,
     EXHIBITION_THEMES,

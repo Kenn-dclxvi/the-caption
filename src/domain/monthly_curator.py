@@ -1,10 +1,12 @@
 import json
-import os
 import re
 from typing import Optional, Dict, Any, List, Final
 from src.lib.logger import setup_logger
-from src.domain.ports import IntelligenceTransporter, MonthlyInsightReader
-from src.config.settings import DATA_DIR
+from src.domain.ports import (
+    IntelligenceTransporter,
+    MonthlyInsightReader,
+    ShadowLedgerHistoryStore,
+)
 from src.config.prompts import (
     MONTHLY_CHRONICLE_REPORT,
     CURATOR_BANNED_WORDS,
@@ -34,12 +36,14 @@ class MonthlyCurator:
         self,
         transporter: IntelligenceTransporter,
         insight_reader: MonthlyInsightReader,
+        history_store: ShadowLedgerHistoryStore,
     ) -> None:
         logger.info(f"[{self.__REV}] Initializing MonthlyCurator")
         self.__transporter = transporter
         # generate_v4_chronicle は呼び出しごとの knowledge_manager を優先し、
         # 未指定時はここで注入された reader を使う。
         self.__insight_reader = insight_reader
+        self.__history_store = history_store
 
     def generate_monthly_chronicle(self, year_month: str, summary: LedgerSummary, insights: List[Dict[str, str]]) -> Optional[Dict[str, Any]]:
         logger.info(f"[Parsing] Generating Monthly Chronicle for {year_month} with {len(insights)} records")
@@ -158,13 +162,12 @@ class MonthlyCurator:
         year_month: str,
         ledger_paths: Optional[List[str]],
     ) -> List[ShadowLedger]:
-        paths = ledger_paths or self.__discover_v4_ledger_paths()
+        paths = ledger_paths or self.__history_store.discover_shadow_ledger_paths()
         ledgers: List[ShadowLedger] = []
 
         for path in paths:
             try:
-                with open(path, "r", encoding="utf-8") as fh:
-                    payload = json.load(fh)
+                payload = self.__history_store.read_shadow_ledger(path)
                 ledger = ShadowLedger.model_validate(payload)
                 if ledger.target_date.startswith(year_month):
                     ledgers.append(ledger)
@@ -173,14 +176,6 @@ class MonthlyCurator:
 
         ledgers.sort(key=lambda ledger: ledger.target_date)
         return ledgers
-
-    def __discover_v4_ledger_paths(self) -> List[str]:
-        candidates: List[str] = []
-        for root, _, files in os.walk(DATA_DIR):
-            for filename in files:
-                if filename.startswith("v4_shadow_ledger") and filename.endswith(".json"):
-                    candidates.append(os.path.join(root, filename))
-        return sorted(candidates)
 
     def __aggregate_v4_ledgers(self, ledgers: List[ShadowLedger]) -> Dict[str, Any]:
         if not ledgers:

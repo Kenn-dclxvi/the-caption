@@ -9,6 +9,7 @@ from src.app.notifier import Notifier
 from src.infra.ledger_repository import LedgerRepository
 from src.infra.knowledge_manager import KnowledgeManager
 from src.infra.llm_transporter import LlmTransporter
+from src.infra.shadow_ledger_history_repository import ShadowLedgerHistoryRepository
 from src.infra.daily_metrics_repository import DailyMetricsRepository
 from src.infra.market_snapshot_repository import MarketSnapshotRepository
 from src.lib.timeline_controller import TimelineController
@@ -39,7 +40,11 @@ class MonthlyEngine:
         self.__daily_metrics_repo = DailyMetricsRepository()
         self.__market_snapshot_repo = MarketSnapshotRepository()
         self.__timeline = TimelineController()
-        self.__curator = MonthlyCurator(LlmTransporter(), self.__knowledge)
+        self.__curator = MonthlyCurator(
+            LlmTransporter(),
+            self.__knowledge,
+            ShadowLedgerHistoryRepository(),
+        )
         self.__guard = MonthlyGuardRail(self.__timeline)
         self.__chronicle_repo = ChronicleRepository()
 

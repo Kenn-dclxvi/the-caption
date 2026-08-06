@@ -98,11 +98,16 @@ THE CAPTION は、資産の動きを「美術館のキャプション」のよ�
 
 ## 🏗 Core Architecture
 
-システムは「三位一体分離（Trinity Architecture）」により構成されています。
+システムは「三位一体分離（Trinity Architecture）」により構成されています。依存は一方向で、Logic は外部 I/O を持ちません（[ADR-0007](./docs/adr/ADR-0007-layer-separation-and-ports.md)）。
 
-1. **Logic（頭脳）**: `V4PortfolioEngine`, `UniversalIngester`, `MarketCurator`, `GuardRail` 等。正規台帳の生成、配信判定、AI推論に専念。
-2. **Infrastructure（運搬）**: `LedgerRepository`, `LlmTransporter`, `MailSender`, `MarketDataFetcher` 等。物理的I/O、通信、外部APIとの接続を担う。
-3. **View（表現）**: `V4ContentRenderer`, Jinja2 Template 等。データの視覚表現へのマッピングのみを行う。
+1. **Logic（頭脳）** — `src/domain`: `UniversalIngester`, `MarketCurator`, `GuardRail`, `V4LedgerFinalizer` 等。正規台帳の生成、検証、配信判定に専念。外部 I/O は `src/domain/ports.py` の Protocol として宣言し、実装を注入して受け取ります。
+2. **Infrastructure（運搬）** — `src/infra`: `LedgerRepository`, `LlmTransporter`, `MailSender`, `MarketDataFetcher` 等。物理的I/O、通信、外部APIとの接続を担う。
+3. **View（表現）** — `src/app/renderer`: `V4ContentRenderer`, Jinja2 Template 等。データの視覚表現へのマッピングのみを行う。
+
+これらを束ねる `V4PortfolioEngine`（`src/app`）は、実装の生成と注入、実行順序の決定を担います。
+
+> [!NOTE]
+> [ADR-0001](./docs/adr/ADR-0001-trinity-separation.md) の「Trinity Separation」は外部取得層の三層分離（`BrowserManager` / `Operator` / `Client`）を指す別の判断です。Status は Superseded で、公開版では実装を含みません。
 
 ---
 

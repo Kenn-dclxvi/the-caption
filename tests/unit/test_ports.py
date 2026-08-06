@@ -10,12 +10,14 @@ from src.domain.ports import (
     LedgerReader,
     MarketContextReader,
     MonthlyInsightReader,
+    ShadowLedgerHistoryStore,
 )
 from src.infra.canonical_ledger_input_repository import CanonicalLedgerInputRepository
 from src.infra.knowledge_manager import KnowledgeManager
 from src.infra.ledger_repository import LedgerRepository
 from src.infra.llm_transporter import LlmTransporter
 from src.infra.market_data import MarketDataFetcher
+from src.infra.shadow_ledger_history_repository import ShadowLedgerHistoryRepository
 
 # port と、それを満たすべき infra 実装、突き合わせる操作名。
 _PORT_IMPLEMENTATIONS = [
@@ -32,6 +34,8 @@ _PORT_IMPLEMENTATIONS = [
     (CanonicalLedgerInputStore, CanonicalLedgerInputRepository, "read_market_units"),
     (CanonicalLedgerInputStore, CanonicalLedgerInputRepository, "read_history_frame"),
     (CanonicalLedgerInputStore, CanonicalLedgerInputRepository, "write_shadow_ledger"),
+    (ShadowLedgerHistoryStore, ShadowLedgerHistoryRepository, "discover_shadow_ledger_paths"),
+    (ShadowLedgerHistoryStore, ShadowLedgerHistoryRepository, "read_shadow_ledger"),
 ]
 
 

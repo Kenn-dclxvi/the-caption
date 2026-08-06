@@ -4,6 +4,13 @@
 
 ## Context
 
+「Trinity」は本プロダクトで2つの異なる対象を指すため、区別せずに用いると設計判断を誤る。
+
+- **外部取得層の三層分離（本 ADR）**: `BrowserManager` / `Operator` / `Client`。特定金融機関からのブラウザ経由取得に閉じた分離であり、公開版では実装を持たない。
+- **アプリケーション全体のレイヤー分離**: Logic（`src/domain`）/ Infrastructure（`src/infra`）/ View（`src/app/renderer`）。README の Core Architecture が指すのはこちらで、[ADR-0007](./ADR-0007-layer-separation-and-ports.md) が定める。
+
+本 ADR は前者に限る。後者と競合しない。
+
 外部サイトからのブラウザ経由取得は、ブラウザ基盤・ドメイン操作・公開Facadeが混在すると、変更影響の境界が曖昧になり障害切り分けが遅延する。
 
 ## Decision
@@ -32,6 +39,7 @@ ADR-0004 で Collection-Primary へ主従反転し、外部取得層は正規入
 ## Related
 
 - [ADR-0004 Collection-Primary v4](./ADR-0004-collection-primary-v4.md)
+- [ADR-0007 レイヤー分離と port による依存逆転](./ADR-0007-layer-separation-and-ports.md)（アプリケーション全体のレイヤー分離）
 - [ADR Decisions Index](./decisions_index.md)
 - [System Reference](../reference/system.md)
 - [Logic Reference](../reference/logic.md)
