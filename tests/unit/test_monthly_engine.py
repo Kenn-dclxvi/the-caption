@@ -267,7 +267,7 @@ class TestLedgerRepositoryLoadMonth:
 
         assert [document["meta"]["target_date"] for document in documents] == ["2026-01-02", "2026-01-15"]
 
-    def test_load_month_skips_schema_invalid_ledgers(self, tmp_path):
+    def test_load_month_skips_unreadable_ledgers(self, tmp_path):
         from src.infra.ledger_repository import LedgerRepository
 
         (tmp_path / "ledger_20260102.json").write_text(self._ledger_document("2026-01-02"), encoding="utf-8")
@@ -278,6 +278,23 @@ class TestLedgerRepositoryLoadMonth:
             documents = LedgerRepository().load_month("2026-01")
 
         assert [document["meta"]["target_date"] for document in documents] == ["2026-01-02"]
+
+    def test_load_month_skips_schema_invalid_ledgers(self, tmp_path):
+        from src.infra.ledger_repository import LedgerRepository
+
+        (tmp_path / "ledger_20260102.json").write_text(self._ledger_document("2026-01-02"), encoding="utf-8")
+        (tmp_path / "ledger_20260115.json").write_text(self._ledger_document("2026-01-15"), encoding="utf-8")
+
+        # JSON としては読めるが検証を通らない台帳を落とすことを確認する。
+        def _validate(data, source):
+            return source != "ledger_20260115.json"
+
+        with patch("src.infra.ledger_repository.DIR_CURRENT", str(tmp_path)), \
+             patch("src.infra.ledger_repository.validate_ledger_dict", side_effect=_validate) as mock_validate:
+            documents = LedgerRepository().load_month("2026-01")
+
+        assert [document["meta"]["target_date"] for document in documents] == ["2026-01-02"]
+        assert mock_validate.call_count == 2
 
 
 class TestMonthlyEngineNarrativePath:
