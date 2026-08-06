@@ -157,7 +157,7 @@ class TestMonthlyEngineGuardPath:
         basis_file = tmp_path / "portfolio_basis.json"
         basis_file.write_text('{"2026-01": {"total_acquisition_cost_jpy": 700000}}', encoding="utf-8")
 
-        with patch("src.app.monthly_engine._PORTFOLIO_BASIS_FILE", str(basis_file)):
+        with patch("src.app.monthly_engine.PORTFOLIO_BASIS_JSON", str(basis_file)):
             engine.run()
 
         mocks["curator"].generate_v4_chronicle.assert_called_once()
@@ -184,7 +184,7 @@ class TestMonthlyEngineGuardPath:
         basis_file = tmp_path / "portfolio_basis.json"
         basis_file.write_text('{"2026-01": {"total_acquisition_cost_jpy": 1}}', encoding="utf-8")
 
-        with patch("src.app.monthly_engine._PORTFOLIO_BASIS_FILE", str(basis_file)):
+        with patch("src.app.monthly_engine.PORTFOLIO_BASIS_JSON", str(basis_file)):
             engine.run()
 
         summary_vm = mocks["notifier"].monthly_report.call_args.args[1]

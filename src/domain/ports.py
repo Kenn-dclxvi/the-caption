@@ -35,10 +35,10 @@ class MarketContextReader(Protocol):
 
 @runtime_checkable
 class CanonicalLedgerInputStore(Protocol):
-    """Canonical Ledger の計算元入力の読み出し。
+    """Canonical Ledger の計算元入力の読み出しと、統合結果の書き出し。
 
     実装は `CanonicalLedgerInputRepository`。パスは呼び出し側が保持し、
-    本 port は読み出しだけを担う。検証と正規化は domain 側で行う。
+    本 port はファイルの読み書きだけを担う。検証と正規化は domain 側で行う。
     """
 
     def read_external_assets(self, path: str) -> Any:

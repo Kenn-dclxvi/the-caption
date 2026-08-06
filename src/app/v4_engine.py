@@ -55,8 +55,10 @@ class V4PortfolioEngine:
         self.__timeline = TimelineController()
         self.__guard = GuardRail(self.__timeline)
         self.__history_updater = CollectionHistoryUpdater()
-        self.__ingester = UniversalIngester(is_closed_fn=is_market_closed,
-        input_store=CanonicalLedgerInputRepository())
+        self.__ingester = UniversalIngester(
+            is_closed_fn=is_market_closed,
+            input_store=CanonicalLedgerInputRepository(),
+        )
         self.__adapter = ShadowLedgerAdapter()
         self.__finalizer = V4LedgerFinalizer(self.__timeline)
         self.__context_repo = ContextRepository()

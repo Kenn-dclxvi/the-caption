@@ -115,8 +115,10 @@ def backfill(
         return 1
 
     timeline = TimelineController()
-    shadow = UniversalIngester(is_closed_fn=is_market_closed,
-        input_store=CanonicalLedgerInputRepository()).run(
+    shadow = UniversalIngester(
+        is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository(),
+    ).run(
         date_str,
         units_mode="strict",
         previous_records=_previous_ledger_records(repo, date_str, pending),

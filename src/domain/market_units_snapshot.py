@@ -6,7 +6,7 @@
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Final, List, Literal, Optional, TypedDict
+from typing import Any, Dict, Final, List, Literal, TypedDict
 
 SNAPSHOT_SCHEMA_VERSION: Final[str] = "market_units_snapshot.v1"
 SNAPSHOT_TYPE: Final[str] = "FULL_SNAPSHOT"

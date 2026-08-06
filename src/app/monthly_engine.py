@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 from typing import Final, Any
 
-from src.config.settings import DATA_DIR, LAST_SENT_FILE_MONTHLY, VERSION, LLM_PRIORITY_ORDER, SMTP_TO
+from src.config.settings import PORTFOLIO_BASIS_JSON, LAST_SENT_FILE_MONTHLY, VERSION, LLM_PRIORITY_ORDER, SMTP_TO
 from src.lib.logger import setup_logger
 from src.app.notifier import Notifier
 from src.infra.ledger_repository import LedgerRepository
@@ -25,7 +25,6 @@ from src.lib.models import LedgerSummary
 from src.lib.utils import SystemUtils
 
 logger = setup_logger(__name__)
-_PORTFOLIO_BASIS_FILE: Final[str] = os.path.join(DATA_DIR, "portfolio_basis.json")
 
 class MonthlyEngine:
     __REV: Final[str] = "Rev. 5"
@@ -195,7 +194,7 @@ class MonthlyEngine:
         if not year_month:
             return None
         try:
-            with open(_PORTFOLIO_BASIS_FILE, "r", encoding="utf-8") as f:
+            with open(PORTFOLIO_BASIS_JSON, "r", encoding="utf-8") as f:
                 payload = json.load(f)
         except Exception as exc:
             logger.warning(f"[V4] Failed to read portfolio basis for monthly summary: {exc}")

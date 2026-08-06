@@ -791,14 +791,17 @@ class UniversalIngester:
     def _history_rows_up(self, asset_name: str, date_col: str, target_date: str) -> Optional[pd.DataFrame]:
         try:
             df = self._input_store.read_history_frame(self.history_dir, asset_name, date_col)
+            if df is None:
+                return None
+            # 対象日までの切り出しはドメイン判断のため domain 側に残す。
+            # 日付列に解釈不能な値が混ざると read_csv は例外を投げずに列を str の
+            # まま返すため、比較はここで初めて失敗する。1 資産の履歴不正で台帳
+            # 生成全体を落とさないよう、切り出しまでを同じ try に含める。
+            df_up = df[df[date_col] <= pd.to_datetime(target_date)]
         except Exception as exc:
             logger.warning(f"[Guard] Failed to read v4 history for {asset_name}: {exc}")
             return None
-        if df is None:
-            return None
 
-        # 対象日までの切り出しはドメイン判断のため domain 側に残す。
-        df_up = df[df[date_col] <= pd.to_datetime(target_date)]
         if df_up.empty:
             return None
         return df_up

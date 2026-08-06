@@ -29,6 +29,8 @@ _VALID_CASH_BUFFERS: Final[Tuple[str, ...]] = ("EFFECTIVE", "ADEQUATE", "THIN", 
 _VALID_STAGNATION_READINESS: Final[Tuple[str, ...]] = ("HIGH", "MEDIUM", "LOW", "UNKNOWN")
 _TECH_ASSET_CLASSES: Final[Tuple[str, ...]] = ("MUTUAL_FUNDS", "US_STOCK")
 _METAL_ASSET_CLASSES: Final[Tuple[str, ...]] = ("COMMODITIES",)
+# View 側の PositionViewModel.is_cash と同じ集合の二重定義。判定を View から
+# 受け取らないための複製であり、一方を変えたら他方も追随させる。
 _CASH_ASSET_CLASSES: Final[Tuple[str, ...]] = ("SHORT_TERM", "CASH_EQUIVALENTS")
 _MAX_VALIDATION_RETRIES: Final[int] = 3
 
