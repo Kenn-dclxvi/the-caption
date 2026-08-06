@@ -2,7 +2,7 @@ import importlib.util
 import json
 import re
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from src.domain.ledger_schema import ShadowAssetRecord, ShadowLedger
 from src.domain.monthly_curator import (
@@ -124,12 +124,11 @@ def _response() -> str:
 
 
 def test_generate_v4_chronicle_aggregates_dynamic_and_static_sources() -> None:
-    with patch("src.domain.monthly_curator.LlmTransporter") as mock_transporter_cls, \
-            patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
+    with patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
             patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
-        transporter = mock_transporter_cls.return_value
+        transporter = MagicMock()
         transporter.request_intelligence.return_value = _response()
-        curator = MonthlyCurator()
+        curator = MonthlyCurator(transporter, MagicMock())
 
         result = curator.generate_v4_chronicle(
             "2026-04",
@@ -192,12 +191,11 @@ def test_generate_v4_chronicle_aggregates_dynamic_and_static_sources() -> None:
 
 
 def test_generate_v4_chronicle_uses_request_intelligence() -> None:
-    with patch("src.domain.monthly_curator.LlmTransporter") as mock_transporter_cls, \
-            patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
+    with patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
             patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
-        transporter = mock_transporter_cls.return_value
+        transporter = MagicMock()
         transporter.request_intelligence.return_value = f"[JSON_START]{_response()}[JSON_END]"
-        curator = MonthlyCurator()
+        curator = MonthlyCurator(transporter, MagicMock())
 
         result = curator.generate_v4_chronicle(
             "2026-04",
@@ -215,12 +213,11 @@ def test_generate_v4_chronicle_uses_request_intelligence() -> None:
 
 
 def test_generate_v4_chronicle_uses_daily_metrics_total_path_without_ledger_trend() -> None:
-    with patch("src.domain.monthly_curator.LlmTransporter") as mock_transporter_cls, \
-            patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
+    with patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
             patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
-        transporter = mock_transporter_cls.return_value
+        transporter = MagicMock()
         transporter.request_intelligence.return_value = _response()
-        curator = MonthlyCurator()
+        curator = MonthlyCurator(transporter, MagicMock())
 
         result = curator.generate_v4_chronicle(
             "2026-04",
@@ -250,12 +247,11 @@ def test_generate_v4_chronicle_uses_daily_metrics_total_path_without_ledger_tren
 
 
 def test_generate_v4_chronicle_summarizes_market_snapshot_boundaries() -> None:
-    with patch("src.domain.monthly_curator.LlmTransporter") as mock_transporter_cls, \
-            patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
+    with patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
             patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
-        transporter = mock_transporter_cls.return_value
+        transporter = MagicMock()
         transporter.request_intelligence.return_value = _response()
-        curator = MonthlyCurator()
+        curator = MonthlyCurator(transporter, MagicMock())
 
         result = curator.generate_v4_chronicle(
             "2026-04",
@@ -438,12 +434,11 @@ def test_prompt_chronicle_system_v4_carries_length_constraints() -> None:
 
 
 def test_generate_v4_chronicle_prefers_ledger_trend_over_daily_metrics_total_path() -> None:
-    with patch("src.domain.monthly_curator.LlmTransporter") as mock_transporter_cls, \
-            patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
+    with patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
             patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
-        transporter = mock_transporter_cls.return_value
+        transporter = MagicMock()
         transporter.request_intelligence.return_value = _response()
-        curator = MonthlyCurator()
+        curator = MonthlyCurator(transporter, MagicMock())
 
         result = curator.generate_v4_chronicle(
             "2026-04",
@@ -471,10 +466,9 @@ def test_generate_v4_chronicle_prefers_ledger_trend_over_daily_metrics_total_pat
 
 
 def test_generate_v4_chronicle_rejects_schema_mismatch() -> None:
-    with patch("src.domain.monthly_curator.LlmTransporter") as mock_transporter_cls, \
-            patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
+    with patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
             patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
-        transporter = mock_transporter_cls.return_value
+        transporter = MagicMock()
         transporter.request_intelligence.return_value = json.dumps({
             "chronicle": {
                 "title": "構造転換",
@@ -493,7 +487,7 @@ def test_generate_v4_chronicle_rejects_schema_mismatch() -> None:
                 "data_quality": "OK",
             },
         })
-        curator = MonthlyCurator()
+        curator = MonthlyCurator(transporter, MagicMock())
 
         try:
             curator.generate_v4_chronicle("2026-04", shadow_ledgers=[], insights=[])
@@ -504,15 +498,14 @@ def test_generate_v4_chronicle_rejects_schema_mismatch() -> None:
 
 
 def test_generate_v4_chronicle_rejects_banned_words() -> None:
-    with patch("src.domain.monthly_curator.LlmTransporter") as mock_transporter_cls, \
-            patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
+    with patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
             patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4), \
             patch("src.domain.monthly_curator.MONTHLY_CHRONICLE_BANNED_WORDS", _MONTHLY_CHRONICLE_BANNED_WORDS):
-        transporter = mock_transporter_cls.return_value
+        transporter = MagicMock()
         payload = json.loads(_response())
         payload["chronicle"]["portfolio_audit"] = "様子見を続けます。"
         transporter.request_intelligence.return_value = json.dumps(payload, ensure_ascii=False)
-        curator = MonthlyCurator()
+        curator = MonthlyCurator(transporter, MagicMock())
 
         try:
             curator.generate_v4_chronicle("2026-04", shadow_ledgers=[], insights=[])

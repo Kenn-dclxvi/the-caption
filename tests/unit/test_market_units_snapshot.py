@@ -3,9 +3,8 @@ from unittest.mock import patch
 
 import pytest
 
-from src.domain.market_units_snapshot import (
-    MarketUnitsSnapshotError,
-    build_asset_key,
+from src.domain.market_units_snapshot import MarketUnitsSnapshotError, build_asset_key
+from src.infra.market_units_snapshot_repository import (
     create_units_snapshot,
     ensure_units_snapshot,
     load_units_snapshot,
@@ -13,6 +12,8 @@ from src.domain.market_units_snapshot import (
     snapshot_path,
 )
 from src.domain.universal_ingester import UniversalIngester
+from src.infra.market_data import is_market_closed
+from src.infra.canonical_ledger_input_repository import CanonicalLedgerInputRepository
 
 
 def _write_market_units(path, rows: list[str] | None = None) -> None:
@@ -44,6 +45,8 @@ def _ingester(tmp_path, market_units_csv, snapshot_dir):
         external_assets_path=str(external_json),
         history_dir=str(history_dir),
         units_snapshot_dir=str(snapshot_dir),
+        is_closed_fn=is_market_closed,
+        input_store=CanonicalLedgerInputRepository(),
     )
 
 
@@ -123,7 +126,7 @@ def test_ensure_snapshot_atomic_write_failure_leaves_no_target(tmp_path):
     _write_market_units(market_units_csv)
 
     with patch(
-        "src.domain.market_units_snapshot.atomic_write_json",
+        "src.infra.market_units_snapshot_repository.atomic_write_json",
         side_effect=OSError("disk full"),
     ), pytest.raises(OSError, match="disk full"):
         ensure_units_snapshot(

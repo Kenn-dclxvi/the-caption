@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from src.config.settings import DATA_DIR
-from src.domain.market_units_snapshot import create_units_snapshot, snapshot_path
+from src.infra.market_units_snapshot_repository import create_units_snapshot, snapshot_path
 
 
 def _sha256_file(path: str) -> str:

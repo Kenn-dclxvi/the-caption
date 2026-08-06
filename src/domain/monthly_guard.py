@@ -2,7 +2,6 @@ from datetime import datetime
 from typing import Final
 from src.lib.utils import SystemUtils
 from src.lib.timeline_controller import TimelineController
-from src.infra.ledger_repository import LedgerRepository
 from src.config.settings import LAST_SENT_FILE_MONTHLY
 from src.lib.logger import setup_logger
 
@@ -10,10 +9,9 @@ class MonthlyGuardRail:
     __REV: Final[str] = "Rev. 3"
     __logger = setup_logger(__name__)
 
-    def __init__(self, timeline: TimelineController, repo: LedgerRepository) -> None:
+    def __init__(self, timeline: TimelineController) -> None:
         self.__logger.info(f"[{self.__REV}] Initializing MonthlyGuardRail")
         self.__timeline = timeline
-        self.__repo = repo
 
     def should_proceed(self, target_date_str: str, force_send: bool) -> bool:
         if force_send:

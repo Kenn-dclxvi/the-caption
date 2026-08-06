@@ -3,7 +3,7 @@ import os
 import re
 from typing import Optional, Dict, Any, List, Final
 from src.lib.logger import setup_logger
-from src.infra.llm_transporter import LlmTransporter
+from src.domain.ports import IntelligenceTransporter, MonthlyInsightReader
 from src.config.settings import DATA_DIR
 from src.config.prompts import (
     MONTHLY_CHRONICLE_REPORT,
@@ -12,9 +12,8 @@ from src.config.prompts import (
     PROMPT_CHRONICLE_SYSTEM_V4,
     OUTPUT_SCHEMA_CHRONICLE_V4,
 )
-from src.app.renderer.view_models import SummaryViewModel
+from src.lib.models import LedgerSummary
 from src.domain.ledger_schema import ShadowLedger
-from src.infra.knowledge_manager import KnowledgeManager
 from src.lib.utils import SystemUtils
 
 logger = setup_logger(__name__)
@@ -31,11 +30,18 @@ class V4ChronicleBannedWordsViolation(RuntimeError):
 class MonthlyCurator:
     __REV: Final[str] = "Rev. 6"
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        transporter: IntelligenceTransporter,
+        insight_reader: MonthlyInsightReader,
+    ) -> None:
         logger.info(f"[{self.__REV}] Initializing MonthlyCurator")
-        self.__transporter = LlmTransporter()
+        self.__transporter = transporter
+        # generate_v4_chronicle は呼び出しごとの knowledge_manager を優先し、
+        # 未指定時はここで注入された reader を使う。
+        self.__insight_reader = insight_reader
 
-    def generate_monthly_chronicle(self, year_month: str, summary_vm: SummaryViewModel, insights: List[Dict[str, str]]) -> Optional[Dict[str, Any]]:
+    def generate_monthly_chronicle(self, year_month: str, summary: LedgerSummary, insights: List[Dict[str, str]]) -> Optional[Dict[str, Any]]:
         logger.info(f"[Parsing] Generating Monthly Chronicle for {year_month} with {len(insights)} records")
 
         if len(insights) < 10:
@@ -49,7 +55,7 @@ class MonthlyCurator:
         prompt = MONTHLY_CHRONICLE_REPORT.format(
             year_month=year_month,
             insight_stream=insight_stream_text,
-            safe_ratio=summary_vm.fmt_safe_ratio
+            safe_ratio=f"{summary.safe_ratio_pct:.1f}%"
         )
 
         return self.__execute_prompt(prompt)
@@ -62,7 +68,7 @@ class MonthlyCurator:
         daily_metrics: Optional[List[Dict[str, Any]]] = None,
         market_snapshots: Optional[List[Dict[str, Any]]] = None,
         ledger_paths: Optional[List[str]] = None,
-        knowledge_manager: Optional[KnowledgeManager] = None,
+        knowledge_manager: Optional[MonthlyInsightReader] = None,
     ) -> Dict[str, Any]:
         logger.info(f"[V4] Generating Monthly Chronicle for {year_month}")
 
@@ -142,9 +148,9 @@ class MonthlyCurator:
     def __load_v4_insights(
         self,
         year_month: str,
-        knowledge_manager: Optional[KnowledgeManager],
+        knowledge_manager: Optional[MonthlyInsightReader],
     ) -> List[Dict[str, str]]:
-        manager = knowledge_manager or KnowledgeManager()
+        manager = knowledge_manager or self.__insight_reader
         return manager.extract_monthly_insights(year_month)
 
     def __load_v4_ledgers(

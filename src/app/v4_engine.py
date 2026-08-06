@@ -12,7 +12,7 @@ from src.config.settings import DATA_DIR, LAST_SENT_FILE_CURRENT, LLM_PRIORITY_O
 from src.domain.daily_metrics import build_daily_metrics, build_deterministic_daily_context
 from src.domain.collection_history_updater import CollectionHistoryUpdater
 from src.domain.guard_rail import GuardRail
-from src.domain.market_units_snapshot import ensure_units_snapshot
+from src.infra.market_units_snapshot_repository import ensure_units_snapshot
 from src.domain.shadow_ledger_adapter import ShadowLedgerAdapter
 from src.domain.v4_ledger_finalizer import V4LedgerFinalizer
 from src.domain.universal_ingester import UniversalIngester
@@ -20,8 +20,9 @@ from src.infra.context_repository import ContextRepository
 from src.infra.daily_metrics_repository import DailyMetricsRepository
 from src.infra.knowledge_manager import KnowledgeManager
 from src.infra.ledger_repository import LedgerRepository
+from src.infra.canonical_ledger_input_repository import CanonicalLedgerInputRepository
 from src.infra.mail_sender import MailSender
-from src.infra.market_data import MarketDataFetcher
+from src.infra.market_data import MarketDataFetcher, is_market_closed
 from src.infra.market_snapshot_repository import MarketSnapshotRepository
 from src.lib.logger import setup_logger
 from src.lib.atomic_write import atomic_write_json
@@ -54,7 +55,10 @@ class V4PortfolioEngine:
         self.__timeline = TimelineController()
         self.__guard = GuardRail(self.__timeline)
         self.__history_updater = CollectionHistoryUpdater()
-        self.__ingester = UniversalIngester()
+        self.__ingester = UniversalIngester(
+            is_closed_fn=is_market_closed,
+            input_store=CanonicalLedgerInputRepository(),
+        )
         self.__adapter = ShadowLedgerAdapter()
         self.__finalizer = V4LedgerFinalizer(self.__timeline)
         self.__context_repo = ContextRepository()
