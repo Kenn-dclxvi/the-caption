@@ -12,7 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
+      # レビュー結果をPRコメントとして投稿するため write が必要。
+      pull-requests: write
       issues: read
       id-token: write
 
@@ -30,5 +31,7 @@ jobs:
           # レビュー観点は .claude/commands/pr-review.md を正本とする。
           # ローカルでも同じ `/pr-review <PR番号>` で実行できる。
           prompt: '/pr-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
+          # 投稿手段を許可しないとレビュー本文がPRへ届かず、job成功のまま出力0件になる。
+          claude_args: '--allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api:*),Bash(gh pr comment:*),Read,Grep,Glob"'
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
