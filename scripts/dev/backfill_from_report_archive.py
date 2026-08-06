@@ -35,17 +35,18 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from src.config.settings import DIR_CURRENT
-from src.domain.market_units_snapshot import (
-    MARKET_UNITS_CSV,
+from src.config.settings import DIR_CURRENT, MARKET_UNITS_CSV
+from src.domain.shadow_ledger_adapter import ShadowLedgerAdapter
+from src.domain.universal_ingester import UniversalIngester
+from src.domain.v4_ledger_finalizer import V4LedgerFinalizer
+from src.infra.canonical_ledger_input_repository import CanonicalLedgerInputRepository
+from src.infra.ledger_repository import LedgerRepository
+from src.infra.market_data import is_market_closed
+from src.infra.market_units_snapshot_repository import (
     create_units_snapshot,
     load_market_units_csv,
     snapshot_path,
 )
-from src.domain.shadow_ledger_adapter import ShadowLedgerAdapter
-from src.domain.universal_ingester import UniversalIngester
-from src.domain.v4_ledger_finalizer import V4LedgerFinalizer
-from src.infra.ledger_repository import LedgerRepository
 from src.lib.timeline_controller import TimelineController
 
 _DEFAULT_ARCHIVE = os.path.join("data", "runtime", "report_archive_20260430_20260728.json")
@@ -268,6 +269,8 @@ def backfill_day(
         )
 
         ingester = UniversalIngester(
+            is_closed_fn=is_market_closed,
+            input_store=CanonicalLedgerInputRepository(),
             funds_csv_path=units_csv,
             external_assets_path=external_path,
             portfolio_basis_path=basis_path,
