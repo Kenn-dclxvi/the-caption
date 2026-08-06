@@ -1,13 +1,15 @@
 import json
 import os
 from datetime import datetime
-from typing import Final, Any, Optional
+from typing import Final, Any
 
-from src.config.settings import DATA_DIR, LAST_SENT_FILE_MONTHLY, VERSION, LLM_PRIORITY_ORDER, SMTP_TO
+from src.config.settings import PORTFOLIO_BASIS_JSON, LAST_SENT_FILE_MONTHLY, VERSION, LLM_PRIORITY_ORDER, SMTP_TO
 from src.lib.logger import setup_logger
 from src.app.notifier import Notifier
 from src.infra.ledger_repository import LedgerRepository
 from src.infra.knowledge_manager import KnowledgeManager
+from src.infra.llm_transporter import LlmTransporter
+from src.infra.shadow_ledger_history_repository import ShadowLedgerHistoryRepository
 from src.infra.daily_metrics_repository import DailyMetricsRepository
 from src.infra.market_snapshot_repository import MarketSnapshotRepository
 from src.lib.timeline_controller import TimelineController
@@ -24,7 +26,6 @@ from src.lib.models import LedgerSummary
 from src.lib.utils import SystemUtils
 
 logger = setup_logger(__name__)
-_PORTFOLIO_BASIS_FILE: Final[str] = os.path.join(DATA_DIR, "portfolio_basis.json")
 
 class MonthlyEngine:
     __REV: Final[str] = "Rev. 5"
@@ -39,8 +40,12 @@ class MonthlyEngine:
         self.__daily_metrics_repo = DailyMetricsRepository()
         self.__market_snapshot_repo = MarketSnapshotRepository()
         self.__timeline = TimelineController()
-        self.__curator = MonthlyCurator()
-        self.__guard = MonthlyGuardRail(self.__timeline, self.__repo)
+        self.__curator = MonthlyCurator(
+            LlmTransporter(),
+            self.__knowledge,
+            ShadowLedgerHistoryRepository(),
+        )
+        self.__guard = MonthlyGuardRail(self.__timeline)
         self.__chronicle_repo = ChronicleRepository()
 
     def run(self, **kwargs: Any) -> None:
@@ -75,11 +80,10 @@ class MonthlyEngine:
             daily_metrics = self.__daily_metrics_repo.load_month(year_month)
             market_snapshots = self.__market_snapshot_repo.load_month(year_month)
 
-            summary_vm: Optional[SummaryViewModel]
+            summary: LedgerSummary
             if ledger_dict:
                 summary_dict = ledger_dict.get("summary", {})
                 summary = LedgerSummary(**summary_dict)
-                summary_vm = SummaryViewModel(summary)
             else:
                 if len(daily_metrics) < self.__V4_DAILY_METRICS_MIN_DAYS:
                     logger.error(
@@ -87,7 +91,8 @@ class MonthlyEngine:
                         f"({len(daily_metrics)}/{self.__V4_DAILY_METRICS_MIN_DAYS})."
                     )
                     return
-                summary_vm = self.__build_summary_vm_from_daily_metrics(daily_metrics)
+                summary = self.__build_summary_from_daily_metrics(daily_metrics)
+            summary_vm = SummaryViewModel(summary)
 
             narrative_data = None
             if reuse_context:
@@ -113,7 +118,7 @@ class MonthlyEngine:
                         f"({len(daily_metrics)}/{self.__V4_DAILY_METRICS_MIN_DAYS}); "
                         "falling back to legacy monthly chronicle."
                     )
-                    narrative_data = self.__curator.generate_monthly_chronicle(year_month, summary_vm, insights)
+                    narrative_data = self.__curator.generate_monthly_chronicle(year_month, summary, insights)
                 if narrative_data:
                     self.__chronicle_repo.save(narrative_data, year_month)
 
@@ -145,7 +150,7 @@ class MonthlyEngine:
             logger.info("[Recovery] Action: Inspect traceback above. Data integrity check recommended before re-run.")
             self.__notifier.system_alert(str(e), "SYSTEM_CRASH_MONTHLY")
 
-    def __build_summary_vm_from_daily_metrics(self, daily_metrics: list[dict[str, Any]]) -> SummaryViewModel:
+    def __build_summary_from_daily_metrics(self, daily_metrics: list[dict[str, Any]]) -> LedgerSummary:
         sorted_metrics = sorted(daily_metrics, key=lambda row: str(row.get("target_date", "")))
         start_metrics = sorted_metrics[0]
         end_metrics = sorted_metrics[-1]
@@ -188,13 +193,13 @@ class MonthlyEngine:
             safe_ratio_pct=safe_ratio_pct,
             damper_coef=damper_coef,
         )
-        return SummaryViewModel(summary)
+        return summary
 
     def __load_total_acquisition_cost(self, year_month: str) -> float | None:
         if not year_month:
             return None
         try:
-            with open(_PORTFOLIO_BASIS_FILE, "r", encoding="utf-8") as f:
+            with open(PORTFOLIO_BASIS_JSON, "r", encoding="utf-8") as f:
                 payload = json.load(f)
         except Exception as exc:
             logger.warning(f"[V4] Failed to read portfolio basis for monthly summary: {exc}")

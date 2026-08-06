@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Final
 from src.lib.utils import SystemUtils
 from src.lib.timeline_controller import TimelineController
-from src.infra.ledger_repository import LedgerRepository
+from src.domain.ports import LedgerReader
 from src.config.settings import LAST_SENT_FILE_WEEKLY
 from src.lib.logger import setup_logger
 
@@ -10,7 +10,7 @@ class WeeklyGuardRail:
     __REV: Final[str] = "Rev. 1"
     __logger = setup_logger(__name__)
 
-    def __init__(self, timeline: TimelineController, repo: LedgerRepository) -> None:
+    def __init__(self, timeline: TimelineController, repo: LedgerReader) -> None:
         self.__logger.info(f"[{self.__REV}] Initializing WeeklyGuardRail")
         self.__timeline = timeline
         self.__repo = repo

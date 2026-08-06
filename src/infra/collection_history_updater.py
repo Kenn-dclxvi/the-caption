@@ -10,8 +10,7 @@ from typing import Any, Dict, Final, List, Optional, Set
 import pandas as pd
 import yfinance as yf
 
-from src.config.settings import DIR_COLLECTION_HISTORY
-from src.domain.market_units_snapshot import MARKET_UNITS_CSV
+from src.config.settings import DIR_COLLECTION_HISTORY, MARKET_UNITS_CSV
 from src.lib.logger import setup_logger
 
 logger = setup_logger(__name__)

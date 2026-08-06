@@ -44,6 +44,11 @@ DIR_CURRENT: Final[str] = os.path.join(DATA_DIR, "current")
 
 DIR_COLLECTION: Final[str] = os.path.join(DATA_DIR, "collection")
 DIR_COLLECTION_HISTORY: Final[str] = os.path.join(DIR_COLLECTION, "history")
+# 市場連動資産の保有数の計算元の正典（SSOT A）。domain と infra の双方が参照する。
+MARKET_UNITS_CSV: Final[str] = os.path.join(DIR_COLLECTION, "market_units.csv")
+# 現金・外部資産の絶対額の正典（SSOT B）と、累積取得原価の基準。
+EXTERNAL_ASSETS_JSON: Final[str] = os.path.join(DATA_DIR, "external_assets.json")
+PORTFOLIO_BASIS_JSON: Final[str] = os.path.join(DATA_DIR, "portfolio_basis.json")
 LAST_SENT_FILE_COLLECTION: Final[str] = os.path.join(DATA_DIR, "last_sent_collection.txt")
 DIR_PHASE1_COLLECTION: Final[str] = os.path.join(DATA_DIR, "phase1", "collection")
 

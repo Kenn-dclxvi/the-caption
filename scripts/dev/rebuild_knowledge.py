@@ -15,7 +15,8 @@ from src.infra.context_repository import ContextRepository
 from src.domain.curator import MarketCurator
 from src.infra.knowledge_manager import KnowledgeManager
 from src.infra.ledger_repository import LedgerRepository
-from src.app.renderer.view_models import PositionViewModel, SummaryViewModel
+from src.infra.llm_transporter import LlmTransporter
+from src.infra.market_data import MarketDataFetcher
 from src.lib.timeline_controller import TimelineController
 
 _TOOL_REV: Final[str] = "Rev. 1"
@@ -104,10 +105,7 @@ def _rebuild_single(
         logger.error(f"[Outcome] {msg}")
         return False, msg
 
-    summary_vm = SummaryViewModel(ledger.summary)
-    asset_vms: List[PositionViewModel] = [PositionViewModel(p) for p in ledger.assets]
-
-    report = curator.generate_context_report(date_str, summary_vm, asset_vms, ledger)
+    report = curator.generate_context_report(date_str, ledger.summary, ledger.assets, ledger)
     if report is None:
         msg = f"Curation returned None for {date_str}"
         logger.error(f"[Outcome] {msg}")
@@ -171,7 +169,7 @@ def main() -> None:
     print(f"[Batch] API delay: {args.delay}s per interval")
 
     timeline     = TimelineController()
-    curator      = MarketCurator(timeline)
+    curator      = MarketCurator(timeline, LlmTransporter(), MarketDataFetcher())
     context_repo = ContextRepository()
     knowledge_mgr = KnowledgeManager()
 

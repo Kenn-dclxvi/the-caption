@@ -15,6 +15,7 @@ archive/
 .coverage
 .claude/*
 !.claude/settings.json
+!.claude/commands/
 build/
 dist/
 node_modules/

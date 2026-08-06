@@ -157,7 +157,7 @@ class TestMonthlyEngineGuardPath:
         basis_file = tmp_path / "portfolio_basis.json"
         basis_file.write_text('{"2026-01": {"total_acquisition_cost_jpy": 700000}}', encoding="utf-8")
 
-        with patch("src.app.monthly_engine._PORTFOLIO_BASIS_FILE", str(basis_file)):
+        with patch("src.app.monthly_engine.PORTFOLIO_BASIS_JSON", str(basis_file)):
             engine.run()
 
         mocks["curator"].generate_v4_chronicle.assert_called_once()
@@ -184,7 +184,7 @@ class TestMonthlyEngineGuardPath:
         basis_file = tmp_path / "portfolio_basis.json"
         basis_file.write_text('{"2026-01": {"total_acquisition_cost_jpy": 1}}', encoding="utf-8")
 
-        with patch("src.app.monthly_engine._PORTFOLIO_BASIS_FILE", str(basis_file)):
+        with patch("src.app.monthly_engine.PORTFOLIO_BASIS_JSON", str(basis_file)):
             engine.run()
 
         summary_vm = mocks["notifier"].monthly_report.call_args.args[1]
@@ -359,26 +359,22 @@ class TestMonthlyGuardRail:
         from src.domain.monthly_guard import MonthlyGuardRail
 
         timeline = MagicMock()
-        repo = MagicMock()
         timeline.get_previous_month_last_business_day.return_value = "2026-01-31"
 
+        # MonthlyGuardRail は台帳を読まない。LedgerReader を受け取らないため、
+        # 読み出しが起きないことは signature で保証される。
         with patch("src.domain.monthly_guard.SystemUtils.get_flag", return_value="2025-12"):
-            guard = MonthlyGuardRail(timeline, repo)
+            guard = MonthlyGuardRail(timeline)
 
             assert guard.should_proceed("2026-02-28", force_send=False) is True
-
-        repo.load.assert_not_called()
 
     def test_monthly_lock_still_blocks_same_month(self):
         from src.domain.monthly_guard import MonthlyGuardRail
 
         timeline = MagicMock()
-        repo = MagicMock()
         timeline.get_previous_month_last_business_day.return_value = "2026-01-31"
 
         with patch("src.domain.monthly_guard.SystemUtils.get_flag", return_value="2026-01"):
-            guard = MonthlyGuardRail(timeline, repo)
+            guard = MonthlyGuardRail(timeline)
 
             assert guard.should_proceed("2026-02-28", force_send=False) is False
-
-        repo.load.assert_not_called()

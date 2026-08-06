@@ -2,20 +2,20 @@ import json
 import re
 from typing import Optional, Dict, Any, List, Final
 from src.lib.logger import setup_logger
-from src.infra.llm_transporter import LlmTransporter
+from src.domain.ports import IntelligenceTransporter
 from src.config.prompts import WEEKLY_CHRONICLE_REPORT, CURATOR_BANNED_WORDS
-from src.app.renderer.view_models import SummaryViewModel
+from src.lib.models import LedgerSummary
 
 logger = setup_logger(__name__)
 
 class WeeklyCurator:
     __REV: Final[str] = "Rev. 1"
 
-    def __init__(self) -> None:
+    def __init__(self, transporter: IntelligenceTransporter) -> None:
         logger.info(f"[{self.__REV}] Initializing WeeklyCurator")
-        self.__transporter = LlmTransporter()
+        self.__transporter = transporter
 
-    def generate_weekly_chronicle(self, year_week: str, summary_vm: SummaryViewModel, insights: List[Dict[str, str]]) -> Optional[Dict[str, Any]]:
+    def generate_weekly_chronicle(self, year_week: str, summary: LedgerSummary, insights: List[Dict[str, str]]) -> Optional[Dict[str, Any]]:
         logger.info(f"[Parsing] Generating Weekly Chronicle for {year_week} with {len(insights)} records")
 
         if len(insights) < 3:
@@ -29,7 +29,7 @@ class WeeklyCurator:
         prompt = WEEKLY_CHRONICLE_REPORT.format(
             year_week=year_week,
             insight_stream=insight_stream_text,
-            safe_ratio=summary_vm.fmt_safe_ratio
+            safe_ratio=f"{summary.safe_ratio_pct:.1f}%"
         )
 
         return self.__execute_prompt(prompt)
