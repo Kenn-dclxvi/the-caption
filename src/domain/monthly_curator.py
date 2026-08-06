@@ -5,7 +5,6 @@ from src.lib.logger import setup_logger
 from src.domain.ports import (
     IntelligenceTransporter,
     MonthlyInsightReader,
-    ShadowLedgerHistoryStore,
 )
 from src.config.prompts import (
     MONTHLY_CHRONICLE_REPORT,
@@ -15,7 +14,6 @@ from src.config.prompts import (
     OUTPUT_SCHEMA_CHRONICLE_V4,
 )
 from src.lib.models import LedgerSummary
-from src.domain.ledger_schema import ShadowLedger
 from src.lib.utils import SystemUtils
 
 logger = setup_logger(__name__)
@@ -36,14 +34,12 @@ class MonthlyCurator:
         self,
         transporter: IntelligenceTransporter,
         insight_reader: MonthlyInsightReader,
-        history_store: ShadowLedgerHistoryStore,
     ) -> None:
         logger.info(f"[{self.__REV}] Initializing MonthlyCurator")
         self.__transporter = transporter
         # generate_v4_chronicle は呼び出しごとの knowledge_manager を優先し、
         # 未指定時はここで注入された reader を使う。
         self.__insight_reader = insight_reader
-        self.__history_store = history_store
 
     def generate_monthly_chronicle(self, year_month: str, summary: LedgerSummary, insights: List[Dict[str, str]]) -> Optional[Dict[str, Any]]:
         logger.info(f"[Parsing] Generating Monthly Chronicle for {year_month} with {len(insights)} records")
@@ -67,16 +63,15 @@ class MonthlyCurator:
     def generate_v4_chronicle(
         self,
         year_month: str,
-        shadow_ledgers: Optional[List[ShadowLedger]] = None,
+        ledgers: Optional[List[Dict[str, Any]]] = None,
         insights: Optional[List[Dict[str, str]]] = None,
         daily_metrics: Optional[List[Dict[str, Any]]] = None,
         market_snapshots: Optional[List[Dict[str, Any]]] = None,
-        ledger_paths: Optional[List[str]] = None,
         knowledge_manager: Optional[MonthlyInsightReader] = None,
     ) -> Dict[str, Any]:
         logger.info(f"[V4] Generating Monthly Chronicle for {year_month}")
 
-        resolved_ledgers = shadow_ledgers if shadow_ledgers is not None else self.__load_v4_ledgers(year_month, ledger_paths)
+        resolved_ledgers = ledgers or []
         resolved_insights = insights if insights is not None else self.__load_v4_insights(year_month, knowledge_manager)
         resolved_metrics = daily_metrics or []
         resolved_market_snapshots = market_snapshots or []
@@ -157,27 +152,7 @@ class MonthlyCurator:
         manager = knowledge_manager or self.__insight_reader
         return manager.extract_monthly_insights(year_month)
 
-    def __load_v4_ledgers(
-        self,
-        year_month: str,
-        ledger_paths: Optional[List[str]],
-    ) -> List[ShadowLedger]:
-        paths = ledger_paths or self.__history_store.discover_shadow_ledger_paths()
-        ledgers: List[ShadowLedger] = []
-
-        for path in paths:
-            try:
-                payload = self.__history_store.read_shadow_ledger(path)
-                ledger = ShadowLedger.model_validate(payload)
-                if ledger.target_date.startswith(year_month):
-                    ledgers.append(ledger)
-            except Exception as exc:
-                logger.warning(f"[V4] Skipping unreadable ShadowLedger history: {path} ({exc})")
-
-        ledgers.sort(key=lambda ledger: ledger.target_date)
-        return ledgers
-
-    def __aggregate_v4_ledgers(self, ledgers: List[ShadowLedger]) -> Dict[str, Any]:
+    def __aggregate_v4_ledgers(self, ledgers: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not ledgers:
             return {
                 "ledger_days": 0,
@@ -188,35 +163,38 @@ class MonthlyCurator:
                 "asset_class_trends": [],
             }
 
+        ordered = sorted(ledgers, key=self.__ledger_target_date)
+        start_ledger = ordered[0]
+        end_ledger = ordered[-1]
         buckets: Dict[str, Dict[str, float]] = {}
-        start_total = ledgers[0].total_value_jpy
-        end_total = ledgers[-1].total_value_jpy
+        start_total = self.__ledger_total_value(start_ledger)
+        end_total = self.__ledger_total_value(end_ledger)
 
-        for asset in ledgers[0].assets:
-            key = self.__v4_bucket_key(asset.source, asset.asset_class)
+        for asset in start_ledger.get("assets", []) or []:
+            key = self.__v4_bucket_key(self.__asset_source(asset), self.__asset_class(asset))
             buckets.setdefault(
                 key,
                 {
-                    "source": asset.source,
-                    "asset_class": asset.asset_class,
+                    "source": self.__asset_source(asset),
+                    "asset_class": self.__asset_class(asset),
                     "start_value_jpy": 0.0,
                     "end_value_jpy": 0.0,
                 },
             )
-            buckets[key]["start_value_jpy"] += asset.current_value_jpy
+            buckets[key]["start_value_jpy"] += self.__asset_value(asset)
 
-        for asset in ledgers[-1].assets:
-            key = self.__v4_bucket_key(asset.source, asset.asset_class)
+        for asset in end_ledger.get("assets", []) or []:
+            key = self.__v4_bucket_key(self.__asset_source(asset), self.__asset_class(asset))
             buckets.setdefault(
                 key,
                 {
-                    "source": asset.source,
-                    "asset_class": asset.asset_class,
+                    "source": self.__asset_source(asset),
+                    "asset_class": self.__asset_class(asset),
                     "start_value_jpy": 0.0,
                     "end_value_jpy": 0.0,
                 },
             )
-            buckets[key]["end_value_jpy"] += asset.current_value_jpy
+            buckets[key]["end_value_jpy"] += self.__asset_value(asset)
 
         trends: List[Dict[str, Any]] = []
         for bucket in buckets.values():
@@ -242,9 +220,9 @@ class MonthlyCurator:
         trends.sort(key=lambda row: (row["source"], row["asset_class"]))
         total_change = end_total - start_total
         return {
-            "ledger_days": len(ledgers),
-            "start_date": ledgers[0].target_date,
-            "end_date": ledgers[-1].target_date,
+            "ledger_days": len(ordered),
+            "start_date": self.__ledger_target_date(start_ledger),
+            "end_date": self.__ledger_target_date(end_ledger),
             "start_total_jpy": round(start_total),
             "end_total_jpy": round(end_total),
             "total_change_jpy": round(total_change),
@@ -254,6 +232,24 @@ class MonthlyCurator:
 
     def __v4_bucket_key(self, source: str, asset_class: str) -> str:
         return f"{source}:{asset_class}"
+
+    def __ledger_target_date(self, ledger: Dict[str, Any]) -> str:
+        return str((ledger.get("meta") or {}).get("target_date", ""))
+
+    def __ledger_total_value(self, ledger: Dict[str, Any]) -> float:
+        total = (ledger.get("summary") or {}).get("total_assets_jpy")
+        if total is None:
+            return sum(self.__asset_value(asset) for asset in ledger.get("assets", []) or [])
+        return float(total)
+
+    def __asset_source(self, asset: Dict[str, Any]) -> str:
+        return str(asset.get("source", ""))
+
+    def __asset_class(self, asset: Dict[str, Any]) -> str:
+        return str(asset.get("asset_class", ""))
+
+    def __asset_value(self, asset: Dict[str, Any]) -> float:
+        return float(asset.get("value_jpy") or 0.0)
 
     def __build_v4_prompt(
         self,
@@ -274,7 +270,7 @@ class MonthlyCurator:
             "daily_context_summary": context_summary,
             "daily_metrics_summary": metrics_summary,
             "market_snapshot_summary": market_snapshot_summary,
-            "shadow_ledger_monthly_trend": trend_summary,
+            "ledger_monthly_trend": trend_summary,
             "output_schema": OUTPUT_SCHEMA_CHRONICLE_V4,
         }
         return (
@@ -293,7 +289,7 @@ class MonthlyCurator:
             f"{json.dumps(payload['market_snapshot_summary'], ensure_ascii=False, indent=2)}\n"
             "  </market_snapshot_summary>\n"
             "  <monthly_trend_data>\n"
-            f"{json.dumps(payload['shadow_ledger_monthly_trend'], ensure_ascii=False, indent=2)}\n"
+            f"{json.dumps(payload['ledger_monthly_trend'], ensure_ascii=False, indent=2)}\n"
             "  </monthly_trend_data>\n"
             "  <output_schema>\n"
             f"{json.dumps(payload['output_schema'], ensure_ascii=False, indent=2)}\n"

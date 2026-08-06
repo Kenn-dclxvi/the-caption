@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -233,7 +235,75 @@ class TestMarketSnapshotRepository:
         assert [record["market_summary"] for record in records] == ["start", "mid"]
 
 
+class TestLedgerRepositoryLoadMonth:
+
+    def _ledger_document(self, target_date: str) -> str:
+        return json.dumps(
+            {
+                "meta": {
+                    "generated_at": f"{target_date}T20:00:00",
+                    "target_date": target_date,
+                    "version": "4.3-v4",
+                    "integrity_status": "VERIFIED",
+                    "has_next_day_record": False,
+                },
+                "summary": dict(_SAMPLE_LEDGER_DICT["summary"]),
+                "assets": [],
+            }
+        )
+
+    def test_load_month_reads_only_target_month_ledgers_in_date_order(self, tmp_path):
+        from src.infra.ledger_repository import LedgerRepository
+
+        (tmp_path / "ledger_20260115.json").write_text(self._ledger_document("2026-01-15"), encoding="utf-8")
+        (tmp_path / "ledger_20260102.json").write_text(self._ledger_document("2026-01-02"), encoding="utf-8")
+        (tmp_path / "ledger_20260201.json").write_text(self._ledger_document("2026-02-01"), encoding="utf-8")
+        # 同一ディレクトリの別系統ファイルを拾わないことを確認する。
+        (tmp_path / "daily_metrics_20260115.json").write_text('{"target_date":"2026-01-15"}', encoding="utf-8")
+
+        with patch("src.infra.ledger_repository.DIR_CURRENT", str(tmp_path)), \
+             patch("src.infra.ledger_repository.validate_ledger_dict", return_value=True):
+            documents = LedgerRepository().load_month("2026-01")
+
+        assert [document["meta"]["target_date"] for document in documents] == ["2026-01-02", "2026-01-15"]
+
+    def test_load_month_skips_schema_invalid_ledgers(self, tmp_path):
+        from src.infra.ledger_repository import LedgerRepository
+
+        (tmp_path / "ledger_20260102.json").write_text(self._ledger_document("2026-01-02"), encoding="utf-8")
+        (tmp_path / "ledger_20260115.json").write_text("{ broken json", encoding="utf-8")
+
+        with patch("src.infra.ledger_repository.DIR_CURRENT", str(tmp_path)), \
+             patch("src.infra.ledger_repository.validate_ledger_dict", return_value=True):
+            documents = LedgerRepository().load_month("2026-01")
+
+        assert [document["meta"]["target_date"] for document in documents] == ["2026-01-02"]
+
+
 class TestMonthlyEngineNarrativePath:
+
+    def test_v4_chronicle_receives_month_ledgers(self, harness):
+        engine, mocks = harness
+        month_ledgers = [{"meta": {"target_date": "2026-01-05"}, "summary": {}, "assets": []}]
+        mocks["daily_metrics_repo"].load_month.return_value = _daily_metrics_records(15)
+        mocks["repo"].load_month.return_value = month_ledgers
+
+        engine.run()
+
+        mocks["repo"].load_month.assert_called_once_with("2026-01")
+        _, kwargs = mocks["curator"].generate_v4_chronicle.call_args
+        assert kwargs["ledgers"] == month_ledgers
+
+    def test_empty_month_ledgers_aborts_before_chronicle_generation(self, harness):
+        engine, mocks = harness
+        mocks["daily_metrics_repo"].load_month.return_value = _daily_metrics_records(15)
+        mocks["repo"].load_month.return_value = []
+
+        engine.run()
+
+        mocks["curator"].generate_v4_chronicle.assert_not_called()
+        mocks["notifier"].monthly_report.assert_not_called()
+        assert "LEDGER_MONTH_MISSING_MONTHLY" in mocks["notifier"].system_alert.call_args[0]
 
     def test_generates_chronicle_when_no_cache(self, harness):
         engine, mocks = harness
