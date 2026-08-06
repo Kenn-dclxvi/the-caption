@@ -1,7 +1,7 @@
 ---
 description: THE-CAPTION のプロジェクト固有観点で PR をレビューする
 argument-hint: "[PR番号 または owner/repo/pull/N]"
-allowed-tools: Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh api:*), Read, Grep, Glob
+allowed-tools: Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh api:*), Bash(gh pr comment:*), Read, Grep, Glob
 ---
 
 # PRレビュー
