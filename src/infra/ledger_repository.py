@@ -45,9 +45,11 @@ class LedgerRepository:
             return []
         prefix = f"ledger_{year_month.replace('-', '')}"
         documents: List[MonthlyLedger] = []
+        scanned = 0
         for filename in sorted(os.listdir(DIR_CURRENT)):
             if not filename.startswith(prefix) or not filename.endswith(".json"):
                 continue
+            scanned += 1
             path = os.path.join(DIR_CURRENT, filename)
             try:
                 with open(path, 'r', encoding='utf-8') as f:
@@ -64,6 +66,10 @@ class LedgerRepository:
                 continue
             documents.append(ledger)
         documents.sort(key=lambda document: document.target_date)
+        # 脱落は月境界を黙って別日へずらすため、件数を残す。
+        dropped = scanned - len(documents)
+        if dropped:
+            logger.error(f"[Guard] {dropped}/{scanned} ledgers dropped for {year_month}; month boundary may shift")
         return documents
 
     def save(self, ledger: Ledger, date_str: str) -> None:

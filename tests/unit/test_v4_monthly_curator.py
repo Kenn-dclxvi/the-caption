@@ -543,24 +543,70 @@ def test_generate_v4_chronicle_reports_ledger_integrity_of_month_boundaries() ->
     assert "ledger_integrity" in prompt
 
 
-def test_generate_v4_chronicle_labels_legacy_assets_without_source() -> None:
-    # v3 系の台帳は source を持たない。空文字で素通りさせず UNSPECIFIED として集計する。
-    legacy_document = _ledger_document("01", 100_000, 50_000)
-    for asset in legacy_document["assets"]:
+def _legacy_ledger(day: str, stock_value: float, cash_value: float):
+    """v3 系の台帳（source 列を持たない）を組む。"""
+    document = _ledger_document(day, stock_value, cash_value)
+    for asset in document["assets"]:
         del asset["source"]
-    legacy_ledger = parse_monthly_ledger(legacy_document)
-    assert legacy_ledger is not None
+    ledger = parse_monthly_ledger(document)
+    assert ledger is not None
+    return ledger
 
+
+def _run_curator(ledgers):
     with patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
             patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
         transporter = MagicMock()
         transporter.request_intelligence.return_value = _response()
         curator = MonthlyCurator(transporter, MagicMock())
+        result = curator.generate_v4_chronicle("2026-04", ledgers=ledgers, insights=[])
+    return result, transporter
 
-        result = curator.generate_v4_chronicle("2026-04", ledgers=[legacy_ledger], insights=[])
+
+def test_generate_v4_chronicle_drops_source_breakdown_for_legacy_ledgers() -> None:
+    # v3 系の台帳は計算元区分を持たない。MARKET_UNITS / ABSOLUTE_AMOUNT へ
+    # 帰属させず、資産クラス単位の推移だけを出す。
+    result, _ = _run_curator([_legacy_ledger("01", 100_000, 50_000), _legacy_ledger("30", 120_000, 60_000)])
+
+    assert result["meta"]["source_breakdown"] == "ASSET_CLASS_ONLY"
+    trends = result["meta"]["asset_class_trends"]
+    assert all("source" not in row for row in trends)
+    assert {row["asset_class"] for row in trends} == {"US_STOCK", "CASH"}
+    # 区分できなくても資産クラス単位の推移は月初月末で連続する。
+    assert any(row["asset_class"] == "US_STOCK" and row["change_jpy"] == 20_000 for row in trends)
+
+
+def test_generate_v4_chronicle_does_not_split_buckets_across_source_switchover() -> None:
+    # v4 切替を月内でまたぐ月。source をキーに含めると同じ資産が別バケットへ
+    # 分かれ、全額消滅と新規出現が並ぶ架空の構造変化になる。
+    result, _ = _run_curator([_legacy_ledger("01", 100_000, 50_000), _ledger("30", 120_000, 60_000)])
+
+    assert result["meta"]["source_breakdown"] == "ASSET_CLASS_ONLY"
+    trends = result["meta"]["asset_class_trends"]
+    assert len(trends) == 2
+    for row in trends:
+        assert row["start_value_jpy"] > 0
+        assert row["end_value_jpy"] > 0
+        assert row["change_pct"] is not None
+    assert any(row["asset_class"] == "US_STOCK" and row["change_jpy"] == 20_000 for row in trends)
+    assert any(row["asset_class"] == "CASH" and row["change_jpy"] == 10_000 for row in trends)
+
+
+def test_generate_v4_chronicle_reports_null_change_pct_without_start_value() -> None:
+    # 月初に存在しなかった資産クラスは、母数がないため変化率を出さない。
+    start = _ledger_document("01", 100_000, 50_000)
+    start["assets"] = [asset for asset in start["assets"] if asset["asset_class"] == "US_STOCK"]
+    start["summary"]["total_assets_jpy"] = 100_000
+    start_ledger = parse_monthly_ledger(start)
+    assert start_ledger is not None
+
+    result, _ = _run_curator([start_ledger, _ledger("30", 120_000, 60_000)])
 
     trends = result["meta"]["asset_class_trends"]
-    assert {row["source"] for row in trends} == {"UNSPECIFIED"}
+    cash_row = next(row for row in trends if row["asset_class"] == "CASH")
+    assert cash_row["start_value_jpy"] == 0
+    assert cash_row["change_jpy"] == 60_000
+    assert cash_row["change_pct"] is None
 
 
 def test_generate_v4_chronicle_rejects_schema_mismatch() -> None:

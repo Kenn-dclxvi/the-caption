@@ -11,6 +11,24 @@ _META_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _META_VALID_STATUSES = frozenset({"VERIFIED", "STAGNANT"})
 
 
+def _validate_target_date(v: str) -> str:
+    """meta.target_date の書式と暦妥当性を検証する。台帳スキーマ間で共有する。"""
+    if not _META_DATE_RE.match(v):
+        raise ValueError(f"target_date format must be YYYY-MM-DD, got: {v!r}")
+    try:
+        datetime.strptime(v, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError(f"target_date is not a valid calendar date: {v!r}")
+    return v
+
+
+def _validate_integrity_status(v: str) -> str:
+    """meta.integrity_status の値域を検証する。台帳スキーマ間で共有する。"""
+    if v not in _META_VALID_STATUSES:
+        raise ValueError(f"integrity_status must be one of {sorted(_META_VALID_STATUSES)}, got: {v!r}")
+    return v
+
+
 class _MetaSchema(BaseModel):
     target_date: str
     version: str
@@ -18,23 +36,8 @@ class _MetaSchema(BaseModel):
     generated_at: str
     has_next_day_record: bool = False
 
-    @field_validator("target_date")
-    @classmethod
-    def _date_format(cls, v: str) -> str:
-        if not _META_DATE_RE.match(v):
-            raise ValueError(f"target_date format must be YYYY-MM-DD, got: {v!r}")
-        try:
-            datetime.strptime(v, "%Y-%m-%d")
-        except ValueError:
-            raise ValueError(f"target_date is not a valid calendar date: {v!r}")
-        return v
-
-    @field_validator("integrity_status")
-    @classmethod
-    def _status_enum(cls, v: str) -> str:
-        if v not in _META_VALID_STATUSES:
-            raise ValueError(f"integrity_status must be one of {sorted(_META_VALID_STATUSES)}, got: {v!r}")
-        return v
+    _date_format = field_validator("target_date")(classmethod(lambda cls, v: _validate_target_date(v)))
+    _status_enum = field_validator("integrity_status")(classmethod(lambda cls, v: _validate_integrity_status(v)))
 
 
 class _SummarySchema(BaseModel):
@@ -67,7 +70,6 @@ class MonthlyLedgerAsset(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    name: str = ""
     source: Literal["MARKET_UNITS", "ABSOLUTE_AMOUNT", "UNSPECIFIED"] = ASSET_SOURCE_UNSPECIFIED
     asset_class: str
     value_jpy: float
@@ -79,23 +81,8 @@ class _MonthlyLedgerMeta(BaseModel):
     target_date: str
     integrity_status: str
 
-    @field_validator("target_date")
-    @classmethod
-    def _date_format(cls, v: str) -> str:
-        if not _META_DATE_RE.match(v):
-            raise ValueError(f"target_date format must be YYYY-MM-DD, got: {v!r}")
-        try:
-            datetime.strptime(v, "%Y-%m-%d")
-        except ValueError:
-            raise ValueError(f"target_date is not a valid calendar date: {v!r}")
-        return v
-
-    @field_validator("integrity_status")
-    @classmethod
-    def _status_enum(cls, v: str) -> str:
-        if v not in _META_VALID_STATUSES:
-            raise ValueError(f"integrity_status must be one of {sorted(_META_VALID_STATUSES)}, got: {v!r}")
-        return v
+    _date_format = field_validator("target_date")(classmethod(lambda cls, v: _validate_target_date(v)))
+    _status_enum = field_validator("integrity_status")(classmethod(lambda cls, v: _validate_integrity_status(v)))
 
 
 class _MonthlyLedgerSummary(BaseModel):

@@ -121,6 +121,20 @@ def test_render_v4_monthly_chronicle_uses_slate_symphony_template() -> None:
     renderer.render_safe_ratio_section.assert_not_called()
 
 
+def test_render_v4_monthly_chronicle_omits_source_separator_when_unavailable() -> None:
+    # source 区分が付かない月（v3 系台帳）は先頭に空の区切りを出さない。
+    renderer = MonthlyRenderer()
+    data = _v4_monthly_data()
+    for row in data["meta"]["asset_class_trends"]:
+        del row["source"]
+
+    html = renderer.render_v4(data)
+
+    assert "66.67% / +20,000 JPY" in html
+    assert " / 66.67% / +20,000 JPY" not in html
+    assert "MARKET_UNITS" not in html
+
+
 def test_render_v4_monthly_chronicle_shows_safe_ratio_metrics_when_summary_present() -> None:
     renderer = MonthlyRenderer()
 
