@@ -7,14 +7,11 @@ from src.domain.ports import (
     MonthlyInsightReader,
 )
 from src.config.prompts import (
-    MONTHLY_CHRONICLE_REPORT,
-    CURATOR_BANNED_WORDS,
     MONTHLY_CHRONICLE_BANNED_WORDS,
     PROMPT_CHRONICLE_SYSTEM_V4,
     OUTPUT_SCHEMA_CHRONICLE_V4,
 )
 from src.domain.ledger_schema import MonthlyLedger
-from src.lib.models import LedgerSummary
 from src.lib.utils import SystemUtils
 
 logger = setup_logger(__name__)
@@ -41,25 +38,6 @@ class MonthlyCurator:
         # generate_v4_chronicle は呼び出しごとの knowledge_manager を優先し、
         # 未指定時はここで注入された reader を使う。
         self.__insight_reader = insight_reader
-
-    def generate_monthly_chronicle(self, year_month: str, summary: LedgerSummary, insights: List[Dict[str, str]]) -> Optional[Dict[str, Any]]:
-        logger.info(f"[Parsing] Generating Monthly Chronicle for {year_month} with {len(insights)} records")
-
-        if len(insights) < 10:
-            logger.warning(f"[Guard] The Void engaged: Only {len(insights)} records found for {year_month} (< 10). AI generation skipped.")
-            return {}
-
-        insight_stream_text = ""
-        for record in insights:
-            insight_stream_text += f"[{record['date']}]\n{record['content']}\n\n"
-
-        prompt = MONTHLY_CHRONICLE_REPORT.format(
-            year_month=year_month,
-            insight_stream=insight_stream_text,
-            safe_ratio=f"{summary.safe_ratio_pct:.1f}%"
-        )
-
-        return self.__execute_prompt(prompt)
 
     def generate_v4_chronicle(
         self,
@@ -102,48 +80,6 @@ class MonthlyCurator:
             metrics_summary,
             market_snapshot_summary,
         )
-
-    def __execute_prompt(self, prompt: str) -> Optional[Dict[str, Any]]:
-        logger.info(f"[Acquisition] Executing monthly prompt (Size: {len(prompt)}, preview={prompt[:200]!r}...)")
-
-        try:
-            raw_response = self.__transporter.request_intelligence(prompt)
-            logger.debug(f"[Parsing] Received AI response (size={len(raw_response)}, preview={raw_response[:200]!r}...)")
-
-            json_content = SystemUtils.extract_json_from_response(raw_response)
-
-            try:
-                data = json.loads(json_content)
-
-                violations = []
-                all_text = [
-                    data.get("theme_title", ""),
-                    data.get("chronicle_headline", ""),
-                    data.get("chronicle_body", ""),
-                ]
-
-                combined_text = " ".join(all_text)
-                for word in CURATOR_BANNED_WORDS:
-                    if word in combined_text:
-                        violations.append(word)
-
-                if violations:
-                    violation_msg = f"Action Ban Violation: {violations}"
-                    logger.error(f"[Audit] Censorship failed: {violation_msg}")
-                    raise RuntimeError(violation_msg)
-
-                logger.info("[Audit] Content integrity verified.")
-                return data
-
-            except json.JSONDecodeError as jde:
-                logger.error(f"[Audit] JSON Decode Failed: {jde}")
-                return None
-
-        except Exception as e:
-            if isinstance(e, RuntimeError):
-                raise
-            logger.error(f"[Audit] Prompt execution exception: {e}")
-            return None
 
     def __load_v4_insights(
         self,
@@ -246,6 +182,9 @@ class MonthlyCurator:
     def __v4_bucket_key(self, source: str, asset_class: str) -> str:
         return f"{source}:{asset_class}"
 
+    def __has_context_records(self, context_summary: Dict[str, Any]) -> bool:
+        return any(bool(value) for value in context_summary.values())
+
     def __build_v4_prompt(
         self,
         year_month: str,
@@ -268,15 +207,25 @@ class MonthlyCurator:
             "ledger_monthly_trend": trend_summary,
             "output_schema": OUTPUT_SCHEMA_CHRONICLE_V4,
         }
+        # Knowledge Bank は月次の必須入力ではない。空の器を渡すと埋めるべき欄として
+        # 読まれ、数値根拠のない記述を誘発するため、中身がない場合はタグごと落とす。
+        qualitative_block = ""
+        if insight_stream:
+            qualitative_block += (
+                "  <daily_insights>\n"
+                f"{json.dumps(payload['daily_insights'], ensure_ascii=False, indent=2)}\n"
+                "  </daily_insights>\n"
+            )
+        if self.__has_context_records(context_summary):
+            qualitative_block += (
+                "  <daily_context_summary>\n"
+                f"{json.dumps(payload['daily_context_summary'], ensure_ascii=False, indent=2)}\n"
+                "  </daily_context_summary>\n"
+            )
         return (
             "<user_payload>\n"
             f"  <target_month>{year_month}</target_month>\n"
-            "  <daily_insights>\n"
-            f"{json.dumps(payload['daily_insights'], ensure_ascii=False, indent=2)}\n"
-            "  </daily_insights>\n"
-            "  <daily_context_summary>\n"
-            f"{json.dumps(payload['daily_context_summary'], ensure_ascii=False, indent=2)}\n"
-            "  </daily_context_summary>\n"
+            f"{qualitative_block}"
             "  <daily_metrics_summary>\n"
             f"{json.dumps(payload['daily_metrics_summary'], ensure_ascii=False, indent=2)}\n"
             "  </daily_metrics_summary>\n"

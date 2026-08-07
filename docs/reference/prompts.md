@@ -207,18 +207,12 @@ V4本流（`PROMPT_CHRONICLE_SYSTEM_V4` / `MonthlyCurator.generate_v4_chronicle(
 | 変数 | 供給元 | 内容 |
 | :--- | :--- | :--- |
 | `{year_month}` | `MonthlyEngine` | 対象月 (YYYY-MM) |
-| `daily_metrics_summary` | `DailyMetricsRepository.load_month()` → `MonthlyCurator.generate_v4_chronicle()` | 対象月の `daily_metrics_YYYYMMDD.json` を圧縮した月次AIの主入力。15件未満の場合は既存月次Chronicleへフォールバック |
+| `daily_metrics_summary` | `DailyMetricsRepository.load_month()` → `MonthlyCurator.generate_v4_chronicle()` | 対象月の `daily_metrics_YYYYMMDD.json` を圧縮した月次AIの主入力。15件未満の場合は月次生成を中止し `DAILY_METRICS_INSUFFICIENT_MONTHLY` を発報する |
 | `market_snapshot_summary` | `MarketSnapshotRepository.load_month()` → `MonthlyCurator.generate_v4_chronicle()` | 対象月の `market_snapshot_YYYYMMDD.json` を圧縮した市場観測入力。米国市場日付、休場、`market_summary` 原文、構造化した主要指数、米10年債、VIX、USD/JPY等を扱い、欠損・解析不能値は推測で補完しない |
-| `{insight_stream}` | `KnowledgeManager.extract_monthly_insights()` | 対象月の日次Insightを時系列連結した補助テキスト |
-| `daily_context_summary` | `MonthlyCurator.generate_v4_chronicle()` | 既存Knowledge Bankがある場合の補助構造ログ |
+| `{insight_stream}` | `KnowledgeManager.extract_monthly_insights()` | 対象月の日次Insightを時系列連結した補助テキスト。空の場合は `<daily_insights>` タグごと省略する |
+| `daily_context_summary` | `MonthlyCurator.generate_v4_chronicle()` | 既存Knowledge Bankがある場合の補助構造ログ。空の場合は `<daily_context_summary>` タグごと省略する |
 
-レガシー経路（`MONTHLY_CHRONICLE_REPORT` / `daily_metrics` 15件未満フォールバック）に注入される変数一覧。
-
-| 変数 | 供給元 | 内容 |
-| :--- | :--- | :--- |
-| `{year_month}` | `MonthlyEngine` | 対象月 (YYYY-MM) |
-| `{insight_stream}` | `KnowledgeManager.extract_monthly_insights()` | 対象月の日次Insightを時系列連結した補助テキスト |
-| `{safe_ratio}` | `SummaryViewModel` | 前月末最終営業日時点の安全資産比率 |
+月次に `MONTHLY_CHRONICLE_REPORT` を使うレガシー経路は存在しない。Knowledge Bank は補助入力であり、月次は数値系入力（確定台帳 / `daily_metrics` / `market_snapshot`）だけで完結する。
 
 ### 3.2 Insight Stream アセンブリ
 
@@ -325,23 +319,6 @@ V4本流の月次Chronicle（`OUTPUT_SCHEMA_CHRONICLE_V4` / `PROMPT_CHRONICLE_SY
 
 > 字数はプロンプト/スキーマの指示で担保し、`tests/unit/test_v4_monthly_curator.py` の字数検証テストで上記カウント定義に従って検証する。コード側での自動切り詰め・実行時の自動再生成・送信中止は行わない。
 
-#### レガシー3フィールド版（旧スキーマ）
-
-旧レガシー経路（`MONTHLY_CHRONICLE_REPORT`、`daily_metrics` 15件未満フォールバック）では、以下の3フィールド・350字制約スキーマを用いる。V4本流とは別系統であり、本節の600字制約は適用されない。
-
-```json
-{
-  "theme_title": "この1ヶ月を象徴する25文字以内の日本語タイトル",
-  "chronicle_headline": "月間の最大の構造的変化を断言する40文字以内の短評",
-  "chronicle_body": "①蒸留（日次Insightから補強候補セクター/スタイルを抽出）→②戦略的序列（どの外部アセットがボラティリティ緩和に最も貢献したかを断定）の2段階で350文字以内で記述",
-}
-```
-
-| フィールド | 型 | 制約 | 内容 |
-| :--- | :--- | :--- | :--- |
-| `theme_title` | string | 最大25文字 | 1ヶ月を象徴する日本語タイトル。事実に基づく知的な表現。 |
-| `chronicle_headline` | string | 最大40文字 | 月間の最大の構造的変化またはパラダイム移行を断言。体言止め。 |
-| `chronicle_body` | string | 最大350文字 | 丁寧語。①蒸留（日次Insightから補強候補セクター/スタイルを抽出）②戦略的序列（外部アセットのボラティリティ緩和への貢献を断定）の2段階構成。 |
 
 ### 3.5 生成ルール（月次固有）
 
@@ -384,7 +361,7 @@ LLMレスポンスからのJSON抽出は以下の優先順位で処理する（`
 | 7 | ホールド | 判断の先送り |
 | 8 | 距離を置く | 分析の放棄 |
 
-V4月次専用 `MONTHLY_CHRONICLE_BANNED_WORDS` は、共通8語に `検討` を加えた9語とする。これは `MonthlyCurator.generate_v4_chronicle()` のV4検証だけで使い、日次CONTEXT、週次Chronicle、レガシー月次Chronicleの共通禁止語契約には波及させない。
+V4月次専用 `MONTHLY_CHRONICLE_BANNED_WORDS` は、共通8語に `検討` を加えた9語とする。これは `MonthlyCurator.generate_v4_chronicle()` のV4検証だけで使い、日次CONTEXT、週次Chronicleの共通禁止語契約には波及させない。
 
 - 検出時（CONTEXT / CHRONICLE legacy）: 共通禁止語契約の `RuntimeError` として扱い、呼び出し元の例外ハンドラでフォールバック処理
 - 検出時（CHRONICLE V4 / `MONTHLY_CHRONICLE_BANNED_WORDS`）: `V4ChronicleBannedWordsViolation` を発生させ、`MonthlyEngine.run()` の alert code は `V4_BANNED_WORD_MONTHLY` として一般 `OPERATIONAL_LIMIT_MONTHLY` から分離する
@@ -407,6 +384,6 @@ V4月次専用 `MONTHLY_CHRONICLE_BANNED_WORDS` は、共通8語に `検討` を
 | :--- | :--- |
 | `logic.md §5` | `TimelineController.get_us_market_context()` API仕様（休場判定の実装詳細） |
 | `system.md §4` | LLMプロバイダ設定・リトライ戦略・バックオフ詳細 |
-| `src/config/prompts.py` | 全プロンプトテンプレートの正本（`CURATOR_EXHIBITION_REPORT` / `MONTHLY_CHRONICLE_REPORT` / `CURATOR_BANNED_WORDS` / `MONTHLY_CHRONICLE_BANNED_WORDS` / `EXHIBITION_THEMES`） |
+| `src/config/prompts.py` | 全プロンプトテンプレートの正本（`CURATOR_EXHIBITION_REPORT` / `WEEKLY_CHRONICLE_REPORT` / `CURATOR_BANNED_WORDS` / `MONTHLY_CHRONICLE_BANNED_WORDS` / `EXHIBITION_THEMES`） |
 
 ---

@@ -98,50 +98,6 @@ CURATOR_EXHIBITION_REPORT: Final[str] = """
 </output_format>
 """
 
-MONTHLY_CHRONICLE_REPORT: Final[str] = """
-<role>
-役割: シニア・マーケットアナリスト（月次総括）
-タスク: {year_month}の1ヶ月間におけるポートフォリオと市場の構造的変化（パラダイムシフト）を歴史的観点から総括する。
-言語: 日本語
-</role>
-<constraints>
-<c id="no_meta">AIとしての自己開示・未来予測・不確実な示唆・メタ発言を一切禁ずる。事実と構造的変化のみを冷徹に出力せよ。</c>
-<c id="no_hallucination">提供された日次Insight記録のテキスト内に明示的に存在しない歴史的事件・外部ニュース・過去の市場ショック等の補完記述を完全に禁ずる。推論は提供されたテキストの事実範囲内に限定すること。</c>
-<c id="no_banned">思考停止ワード（様子見・静観等）を厳禁とする。</c>
-</constraints>
-
-<context>
-対象月: {year_month}
-抽出された日次Insight記録（時系列順）:
-{insight_stream}
-</context>
-
-<metrics>安全資産比率: {safe_ratio}</metrics>
-
-<causality>
-- 日々の些末なノイズ（1日の騰落）を無視し、1ヶ月を通した「金利・価格・為替」の合力の推移と、ポートフォリオがその圧力に耐えたか（または恩恵を受けたか）を俯瞰すること。
-- 推論は提供データの事実範囲内に限定すること（→#no_hallucination）。
-</causality>
-
-<schema>
-<field id="theme_title" max="25文字">この1ヶ月を象徴する日本語タイトル。事実に基づく知的表現。</field>
-<field id="chronicle_headline" max="40文字" style="体言止め">月間の最大の構造的変化またはパラダイムの移行を断言する。</field>
-<field id="chronicle_body" max="350文字">丁寧語（です/ます）。以下の2段階で構成すること:
-- 蒸留: 対象月の日次Insight記録（insight_stream）を精査し、補強候補として最も頻出または論理的に有効だったセクター/投資スタイルを抽出すること。
-- 戦略的序列: 月間の金利・為替・VIXの推移に照らし、どの外部アセット（セクター/スタイル）がメイン資産のボラティリティを最も効果的に緩和したかを断定的に総括すること。</field>
-</schema>
-
-<output_format>
-[JSON_START]
-{{
-  "theme_title": "...",
-  "chronicle_headline": "...",
-  "chronicle_body": "..."
-}}
-[JSON_END]
-</output_format>
-"""
-
 WEEKLY_CHRONICLE_REPORT: Final[str] = """
 <role>
 役割: シニア・マーケットアナリスト（週次総括）
@@ -304,7 +260,7 @@ OUTPUT_SCHEMA_CHRONICLE_V4 = {
 
 PROMPT_CHRONICLE_SYSTEM_V4 = """
 <role>Chronicle Aggregator (System Agent)</role>
-<objective>ShadowLedger、daily_metrics、market_snapshot、必要最小限のKnowledge Bankを統合し、月次にしかできない市場因果鑑定・方針監査を行え。</objective>
+<objective>確定台帳、daily_metrics、market_snapshotを統合し、月次にしかできない市場因果鑑定・方針監査を行え。記述は必ずこれら数値入力に根拠を持たせ、Knowledge Bank由来の補助ログは与えられた場合にのみ補強材料として扱え。</objective>
 
 <input_contract>
   <daily_metrics_summary>日次AIではなく確定論で作られた月次入力。総資産推移、MARKET_UNITS、ABSOLUTE_AMOUNT、欠損、top movers、転換点候補を優先的に読む。</daily_metrics_summary>
