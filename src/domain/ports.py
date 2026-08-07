@@ -8,12 +8,21 @@ from typing import Any, Dict, List, Optional, Protocol, Set, runtime_checkable
 
 import pandas as pd
 
+from src.domain.ledger_schema import MonthlyLedger
+
 
 @runtime_checkable
 class LedgerReader(Protocol):
     """確定台帳（出力の正本）の読み出し。実装は `LedgerRepository`。"""
 
     def load(self, date_str: str) -> Optional[Dict[str, Any]]:
+        ...
+
+    def load_month(self, year_month: str) -> List[MonthlyLedger]:
+        """対象月の確定台帳を検証済みモデルとして target_date 昇順で返す。
+
+        読めない月・検証を通らない台帳は返さない（空を返す）。
+        """
         ...
 
 
@@ -85,22 +94,6 @@ class CanonicalLedgerInputStore(Protocol):
 
     def write_shadow_ledger(self, path: str, document: Dict[str, Any]) -> None:
         """統合結果を指定パスへ原子的に書き出す。"""
-        ...
-
-
-@runtime_checkable
-class ShadowLedgerHistoryStore(Protocol):
-    """月次が参照する ShadowLedger 履歴の探索と読み出し。
-
-    実装は `ShadowLedgerHistoryRepository`。検証と月の絞り込みは domain 側で行う。
-    """
-
-    def discover_shadow_ledger_paths(self) -> List[str]:
-        """ShadowLedger 履歴のパスを昇順で返す。"""
-        ...
-
-    def read_shadow_ledger(self, path: str) -> Any:
-        """ShadowLedger の payload を返す。読めない場合は例外を送出する。"""
         ...
 
 

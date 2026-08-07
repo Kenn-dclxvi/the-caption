@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from src.domain.ledger_schema import ShadowAssetRecord, ShadowLedger
+from src.domain.ledger_schema import MonthlyLedger, parse_monthly_ledger
 from src.domain.monthly_curator import (
     MonthlyCurator,
     V4ChronicleBannedWordsViolation,
@@ -67,37 +67,54 @@ _MONTHLY_CHRONICLE_BANNED_WORDS = [
 ]
 
 
-def _ledger(day: str, stock_value: float, cash_value: float) -> ShadowLedger:
-    return ShadowLedger(
-        target_date=f"2026-04-{day}",
-        generated_at=f"2026-04-{day}T20:00:00",
-        ssot_a_path="data/collection/market_units.csv",
-        ssot_b_path="data/external_assets.json",
-        ssot_b_active_key="2026-04",
-        total_value_jpy=stock_value + cash_value,
-        assets=[
-            ShadowAssetRecord(
-                source="MARKET_UNITS",
-                name="US Equity",
-                asset_class="US_STOCK",
-                category="US_STOCK",
-                currency="USD",
-                units=10,
-                price=100,
-                fx_rate=150,
-                current_value_jpy=stock_value,
-                pricing_status="PRICED",
-            ),
-            ShadowAssetRecord(
-                source="ABSOLUTE_AMOUNT",
-                name="Cash",
-                asset_class="CASH",
-                category="CASH",
-                current_value_jpy=cash_value,
-                pricing_status="STATIC",
-            ),
+def _ledger(
+    day: str,
+    stock_value: float,
+    cash_value: float,
+    integrity_status: str = "VERIFIED",
+) -> MonthlyLedger:
+    """確定台帳（ledger_YYYYMMDD.json）から作る、月次用の検証済みモデルを返す。"""
+    return MonthlyLedger.model_validate(_ledger_document(day, stock_value, cash_value, integrity_status))
+
+
+def _ledger_document(
+    day: str,
+    stock_value: float,
+    cash_value: float,
+    integrity_status: str = "VERIFIED",
+) -> dict:
+    return {
+        "meta": {
+            "generated_at": f"2026-04-{day}T20:00:00",
+            "target_date": f"2026-04-{day}",
+            "version": "4.3-v4",
+            "integrity_status": integrity_status,
+            "has_next_day_record": False,
+        },
+        "summary": {"total_assets_jpy": stock_value + cash_value},
+        "assets": [
+            {
+                "id": "US Equity",
+                "name": "US Equity",
+                "source": "MARKET_UNITS",
+                "asset_class": "US_STOCK",
+                "category": "US_STOCK",
+                "currency": "USD",
+                "value_jpy": stock_value,
+                "pricing_status": "PRICED",
+            },
+            {
+                "id": "Cash",
+                "name": "Cash",
+                "source": "ABSOLUTE_AMOUNT",
+                "asset_class": "CASH",
+                "category": "CASH",
+                "currency": "JPY",
+                "value_jpy": cash_value,
+                "pricing_status": "STATIC",
+            },
         ],
-    )
+    }
 
 
 def _response() -> str:
@@ -128,11 +145,11 @@ def test_generate_v4_chronicle_aggregates_dynamic_and_static_sources() -> None:
             patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
         transporter = MagicMock()
         transporter.request_intelligence.return_value = _response()
-        curator = MonthlyCurator(transporter, MagicMock(), MagicMock())
+        curator = MonthlyCurator(transporter, MagicMock())
 
         result = curator.generate_v4_chronicle(
             "2026-04",
-            shadow_ledgers=[_ledger("01", 100_000, 50_000), _ledger("30", 120_000, 60_000)],
+            ledgers=[_ledger("01", 100_000, 50_000), _ledger("30", 120_000, 60_000)],
             insights=[{
                 "date": "2026-04-15",
                 "content": (
@@ -195,11 +212,11 @@ def test_generate_v4_chronicle_uses_request_intelligence() -> None:
             patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
         transporter = MagicMock()
         transporter.request_intelligence.return_value = f"[JSON_START]{_response()}[JSON_END]"
-        curator = MonthlyCurator(transporter, MagicMock(), MagicMock())
+        curator = MonthlyCurator(transporter, MagicMock())
 
         result = curator.generate_v4_chronicle(
             "2026-04",
-            shadow_ledgers=[_ledger("01", 100_000, 50_000), _ledger("30", 120_000, 60_000)],
+            ledgers=[_ledger("01", 100_000, 50_000), _ledger("30", 120_000, 60_000)],
             insights=[],
         )
 
@@ -217,11 +234,11 @@ def test_generate_v4_chronicle_uses_daily_metrics_total_path_without_ledger_tren
             patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
         transporter = MagicMock()
         transporter.request_intelligence.return_value = _response()
-        curator = MonthlyCurator(transporter, MagicMock(), MagicMock())
+        curator = MonthlyCurator(transporter, MagicMock())
 
         result = curator.generate_v4_chronicle(
             "2026-04",
-            shadow_ledgers=[],
+            ledgers=[],
             insights=[],
             daily_metrics=[
                 {
@@ -251,11 +268,11 @@ def test_generate_v4_chronicle_summarizes_market_snapshot_boundaries() -> None:
             patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
         transporter = MagicMock()
         transporter.request_intelligence.return_value = _response()
-        curator = MonthlyCurator(transporter, MagicMock(), MagicMock())
+        curator = MonthlyCurator(transporter, MagicMock())
 
         result = curator.generate_v4_chronicle(
             "2026-04",
-            shadow_ledgers=[],
+            ledgers=[],
             insights=[],
             market_snapshots=[
                 {
@@ -438,11 +455,11 @@ def test_generate_v4_chronicle_prefers_ledger_trend_over_daily_metrics_total_pat
             patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
         transporter = MagicMock()
         transporter.request_intelligence.return_value = _response()
-        curator = MonthlyCurator(transporter, MagicMock(), MagicMock())
+        curator = MonthlyCurator(transporter, MagicMock())
 
         result = curator.generate_v4_chronicle(
             "2026-04",
-            shadow_ledgers=[_ledger("01", 100_000, 50_000), _ledger("30", 120_000, 60_000)],
+            ledgers=[_ledger("01", 100_000, 50_000), _ledger("30", 120_000, 60_000)],
             insights=[],
             daily_metrics=[
                 {
@@ -463,6 +480,53 @@ def test_generate_v4_chronicle_prefers_ledger_trend_over_daily_metrics_total_pat
     assert result["meta"]["ledger_days"] == 2
     assert result["meta"]["total_change_jpy"] == 30_000
     assert result["meta"]["total_change_pct"] == 20.0
+
+
+def test_generate_v4_chronicle_reports_ledger_integrity_of_month_boundaries() -> None:
+    # STAGNANT の台帳も比較対象に含めるが（ADR-0002）、暫定であることは meta に残す。
+    with patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
+            patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
+        transporter = MagicMock()
+        transporter.request_intelligence.return_value = _response()
+        curator = MonthlyCurator(transporter, MagicMock())
+
+        result = curator.generate_v4_chronicle(
+            "2026-04",
+            ledgers=[
+                _ledger("01", 100_000, 50_000),
+                _ledger("30", 120_000, 60_000, integrity_status="STAGNANT"),
+            ],
+            insights=[],
+        )
+
+    assert result["meta"]["ledger_days"] == 2
+    assert result["meta"]["ledger_integrity"] == {
+        "start_status": "VERIFIED",
+        "end_status": "STAGNANT",
+        "stagnant_days": 1,
+    }
+    prompt = transporter.request_intelligence.call_args[0][0]
+    assert "ledger_integrity" in prompt
+
+
+def test_generate_v4_chronicle_labels_legacy_assets_without_source() -> None:
+    # v3 系の台帳は source を持たない。空文字で素通りさせず UNSPECIFIED として集計する。
+    legacy_document = _ledger_document("01", 100_000, 50_000)
+    for asset in legacy_document["assets"]:
+        del asset["source"]
+    legacy_ledger = parse_monthly_ledger(legacy_document)
+    assert legacy_ledger is not None
+
+    with patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
+            patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
+        transporter = MagicMock()
+        transporter.request_intelligence.return_value = _response()
+        curator = MonthlyCurator(transporter, MagicMock())
+
+        result = curator.generate_v4_chronicle("2026-04", ledgers=[legacy_ledger], insights=[])
+
+    trends = result["meta"]["asset_class_trends"]
+    assert {row["source"] for row in trends} == {"UNSPECIFIED"}
 
 
 def test_generate_v4_chronicle_rejects_schema_mismatch() -> None:
@@ -487,10 +551,10 @@ def test_generate_v4_chronicle_rejects_schema_mismatch() -> None:
                 "data_quality": "OK",
             },
         })
-        curator = MonthlyCurator(transporter, MagicMock(), MagicMock())
+        curator = MonthlyCurator(transporter, MagicMock())
 
         try:
-            curator.generate_v4_chronicle("2026-04", shadow_ledgers=[], insights=[])
+            curator.generate_v4_chronicle("2026-04", ledgers=[], insights=[])
         except V4ChronicleSchemaViolation as exc:
             assert "chronicle.phase_analysis type mismatch" in str(exc)
         else:
@@ -505,10 +569,10 @@ def test_generate_v4_chronicle_rejects_banned_words() -> None:
         payload = json.loads(_response())
         payload["chronicle"]["portfolio_audit"] = "様子見を続けます。"
         transporter.request_intelligence.return_value = json.dumps(payload, ensure_ascii=False)
-        curator = MonthlyCurator(transporter, MagicMock(), MagicMock())
+        curator = MonthlyCurator(transporter, MagicMock())
 
         try:
-            curator.generate_v4_chronicle("2026-04", shadow_ledgers=[], insights=[])
+            curator.generate_v4_chronicle("2026-04", ledgers=[], insights=[])
         except V4ChronicleBannedWordsViolation as exc:
             assert "Action Ban Violation" in str(exc)
             assert "様子見" in str(exc)

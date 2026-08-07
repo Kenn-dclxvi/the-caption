@@ -1,5 +1,11 @@
 import pytest
-from src.domain.ledger_schema import ShadowAssetRecord, ShadowLedger, validate_ledger_dict, LedgerJsonSchema
+from src.domain.ledger_schema import (
+    ShadowAssetRecord,
+    ShadowLedger,
+    parse_monthly_ledger,
+    validate_ledger_dict,
+    LedgerJsonSchema,
+)
 
 _VALID = {
     "meta": {
@@ -87,6 +93,75 @@ class TestValidateLedgerDict:
 
     def test_empty_dict_returns_false(self):
         assert validate_ledger_dict({}) is False
+
+
+class TestParseMonthlyLedger:
+
+    def _v4_asset(self, **overrides) -> dict:
+        asset = {
+            "id": "US Equity",
+            "name": "US Equity",
+            "source": "MARKET_UNITS",
+            "asset_class": "US_STOCK",
+            "category": "US_STOCK",
+            "currency": "USD",
+            "value_jpy": 100_000,
+            "pricing_status": "PRICED",
+        }
+        asset.update(overrides)
+        return asset
+
+    def test_v4_asset_keeps_source_and_value(self):
+        ledger = parse_monthly_ledger(_patch("assets", [self._v4_asset()]))
+        assert ledger is not None
+        assert ledger.target_date == "2026-02-28"
+        assert ledger.integrity_status == "VERIFIED"
+        assert ledger.assets[0].source == "MARKET_UNITS"
+        assert ledger.assets[0].value_jpy == 100_000
+
+    def test_legacy_asset_without_source_is_unspecified(self):
+        # v3 系の台帳は計算元の区分を持たない。欠落は空文字ではなく明示ラベルにする。
+        legacy = {"id": "A1", "name": "Test", "asset_class": "JP_STOCK", "value_jpy": 1_000_000}
+        ledger = parse_monthly_ledger(_patch("assets", [legacy]))
+        assert ledger is not None
+        assert ledger.assets[0].source == "UNSPECIFIED"
+
+    def test_unknown_source_value_is_rejected(self):
+        assert parse_monthly_ledger(_patch("assets", [self._v4_asset(source="MARKET_UNIT")])) is None
+
+    def test_missing_asset_class_is_rejected(self):
+        asset = self._v4_asset()
+        del asset["asset_class"]
+        assert parse_monthly_ledger(_patch("assets", [asset])) is None
+
+    def test_misspelled_asset_class_key_is_rejected(self):
+        asset = self._v4_asset()
+        asset["asset_clas"] = asset.pop("asset_class")
+        assert parse_monthly_ledger(_patch("assets", [asset])) is None
+
+    def test_missing_value_jpy_is_rejected(self):
+        asset = self._v4_asset()
+        del asset["value_jpy"]
+        assert parse_monthly_ledger(_patch("assets", [asset])) is None
+
+    def test_invalid_target_date_is_rejected(self):
+        assert parse_monthly_ledger(_patch("meta.target_date", "20260228")) is None
+
+    def test_invalid_integrity_status_is_rejected(self):
+        assert parse_monthly_ledger(_patch("meta.integrity_status", "UNKNOWN")) is None
+
+    def test_total_value_falls_back_to_asset_sum(self):
+        data = _remove("summary.total_assets_jpy")
+        data["assets"] = [self._v4_asset(value_jpy=40_000), self._v4_asset(value_jpy=60_000)]
+        ledger = parse_monthly_ledger(data)
+        assert ledger is not None
+        assert ledger.total_value_jpy == 100_000
+
+    def test_source_label_included_in_log_on_failure(self):
+        from unittest.mock import patch
+        with patch("src.domain.ledger_schema.logger") as mock_logger:
+            parse_monthly_ledger(_remove("meta"), source="ledger_20260228.json")
+        assert "ledger_20260228.json" in mock_logger.error.call_args[0][0]
 
 
 class TestShadowLedgerSchema:

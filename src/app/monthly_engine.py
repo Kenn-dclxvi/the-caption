@@ -9,7 +9,6 @@ from src.app.notifier import Notifier
 from src.infra.ledger_repository import LedgerRepository
 from src.infra.knowledge_manager import KnowledgeManager
 from src.infra.llm_transporter import LlmTransporter
-from src.infra.shadow_ledger_history_repository import ShadowLedgerHistoryRepository
 from src.infra.daily_metrics_repository import DailyMetricsRepository
 from src.infra.market_snapshot_repository import MarketSnapshotRepository
 from src.lib.timeline_controller import TimelineController
@@ -43,7 +42,6 @@ class MonthlyEngine:
         self.__curator = MonthlyCurator(
             LlmTransporter(),
             self.__knowledge,
-            ShadowLedgerHistoryRepository(),
         )
         self.__guard = MonthlyGuardRail(self.__timeline)
         self.__chronicle_repo = ChronicleRepository()
@@ -105,8 +103,16 @@ class MonthlyEngine:
             if not narrative_data:
                 insights = self.__knowledge.extract_monthly_insights(year_month)
                 if len(daily_metrics) >= self.__V4_DAILY_METRICS_MIN_DAYS:
+                    month_ledgers = self.__repo.load_month(year_month)
+                    if not month_ledgers:
+                        message = f"No canonical ledger found for {year_month}; monthly chronicle aborted."
+                        logger.error(f"[Guard] {message}")
+                        logger.info("[Recovery] Action: Verify data/current/ledger_YYYYMMDD.json for the target month.")
+                        self.__notifier.system_alert(message, "LEDGER_MONTH_MISSING_MONTHLY")
+                        return
                     narrative_data = self.__curator.generate_v4_chronicle(
                         year_month,
+                        ledgers=month_ledgers,
                         insights=insights,
                         daily_metrics=daily_metrics,
                         market_snapshots=market_snapshots,

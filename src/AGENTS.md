@@ -15,7 +15,7 @@
   - `src/infra`: 外部 I/O と連携
   - `src/lib`: ドメイン所有を持たない共有ユーティリティ
 - 移行時は、大規模な書き換えより、挙動を保つ小さな移動を優先する。
-- `src/domain` から `src/app` を import しない。ViewModel は View 層の型であり、domain の signature へ現れない。domain へ渡す値は `src/lib/models` の `Ledger` / `LedgerSummary` / `Position` を使う。
+- `src/domain` から `src/app` を import しない。ViewModel は View 層の型であり、domain の signature へ現れない。domain へ渡す値は `src/lib/models` の `Ledger` / `LedgerSummary` / `Position` を使う。`src/lib/models` が表現しない形状（v4 の正本が持つ計算元区分 `source` など）は、`src/domain/ledger_schema` の検証済みモデル（`MonthlyLedger` など）を定義して渡す。無検証の `Dict[str, Any]` を domain の signature へ現さない。
 - domain が表示用の文字列を必要とする場合は、View の整形結果を受け取らず domain 側で組む。View と同じ書式を使う箇所は、書式が二重定義であることをコメントで残す。
 - domain が外部 I/O の操作を必要とする場合は、`src/infra` の具象を import せず `src/domain/ports.py` へ Protocol を宣言する。実装は `src/infra` が持ち、注入は `src/app` が行う。port を変更したら `tests/unit/test_ports.py` の突き合わせも更新する。
 - 使っていない依存は Protocol へ包まず引数から外す。
