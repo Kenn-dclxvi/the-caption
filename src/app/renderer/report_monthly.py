@@ -219,18 +219,22 @@ class MonthlyRenderer(BaseRenderer):
 
         html_rows = []
         for row in rows:
-            source = escape(str(row.get("source", "")))
+            source = escape(str(row.get("source") or ""))
             asset_class = escape(str(row.get("asset_class", "")))
             end_value = row.get("end_value_jpy", 0)
             change = row.get("change_jpy", 0)
             share = row.get("end_share_pct", 0.0)
+            # source 区分が付かない月（v3 系台帳）は区切りごと省き、空欄を見せない。
+            meta_line = " / ".join(
+                part for part in (source, f"{share:.2f}%", f"{change:+,.0f} JPY") if part
+            )
             html_rows.append(
                 f"""
                 <div style="margin-bottom:24px;">
                   <div style="font-size:13px; color:{self.c_slate}; letter-spacing:0.15em; margin-bottom:6px; font-weight:300; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block; width:100%;">{asset_class}</div>
                   <div style="font-size:30px; font-weight:100; color:{self.c_ink}; margin-bottom:10px; line-height:1.0; letter-spacing:-0.02em; margin-left:-2px;">{end_value:,.0f}</div>
                   <div style="font-size:12px; font-weight:300; letter-spacing:0.05em; color:{self.c_slate}; line-height:1.8;">
-                    <span style="white-space:nowrap;">{source} / {share:.2f}% / {change:+,.0f} JPY</span>
+                    <span style="white-space:nowrap;">{meta_line}</span>
                   </div>
                 </div>
                 """

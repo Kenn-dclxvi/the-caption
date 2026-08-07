@@ -11,10 +11,33 @@ from src.config.prompts import (
     PROMPT_CHRONICLE_SYSTEM_V4,
     OUTPUT_SCHEMA_CHRONICLE_V4,
 )
-from src.domain.ledger_schema import MonthlyLedger
+from src.domain.ledger_schema import ASSET_SOURCE_UNSPECIFIED, MonthlyLedger
 from src.lib.utils import SystemUtils
 
 logger = setup_logger(__name__)
+
+# 資産クラス別推移を source（計算元区分）で割るか、資産クラスだけで割るか。
+SOURCE_BREAKDOWN_BY_SOURCE: Final[str] = "BY_SOURCE"
+SOURCE_BREAKDOWN_ASSET_CLASS_ONLY: Final[str] = "ASSET_CLASS_ONLY"
+
+
+def resolve_source_breakdown(ledgers: List[MonthlyLedger]) -> str:
+    """月境界の台帳が計算元区分（source）を持つかを判定する。
+
+    v3 系の台帳は source を持たない（UNSPECIFIED）。月初と月末のどちらかが
+    区分不能なら、MARKET_UNITS / ABSOLUTE_AMOUNT へ帰属させられない月とみなす。
+    """
+    if not ledgers:
+        return SOURCE_BREAKDOWN_BY_SOURCE
+
+    ordered = sorted(ledgers, key=lambda ledger: ledger.target_date)
+    boundaries = (ordered[0], ordered[-1])
+    has_unspecified = any(
+        asset.source == ASSET_SOURCE_UNSPECIFIED
+        for ledger in boundaries
+        for asset in ledger.assets
+    )
+    return SOURCE_BREAKDOWN_ASSET_CLASS_ONLY if has_unspecified else SOURCE_BREAKDOWN_BY_SOURCE
 
 
 class V4ChronicleSchemaViolation(RuntimeError):
@@ -98,6 +121,7 @@ class MonthlyCurator:
                 "total_change_jpy": 0,
                 "total_change_pct": 0.0,
                 "asset_class_trends": [],
+                "source_breakdown": SOURCE_BREAKDOWN_BY_SOURCE,
                 "ledger_integrity": {
                     "start_status": "",
                     "end_status": "",
@@ -108,35 +132,29 @@ class MonthlyCurator:
         ordered = sorted(ledgers, key=lambda ledger: ledger.target_date)
         start_ledger = ordered[0]
         end_ledger = ordered[-1]
-        buckets: Dict[str, Dict[str, Any]] = {}
         start_total = start_ledger.total_value_jpy
         end_total = end_ledger.total_value_jpy
 
-        for asset in start_ledger.assets:
-            key = self.__v4_bucket_key(asset.source, asset.asset_class)
-            buckets.setdefault(
-                key,
-                {
-                    "source": asset.source,
-                    "asset_class": asset.asset_class,
-                    "start_value_jpy": 0.0,
-                    "end_value_jpy": 0.0,
-                },
-            )
-            buckets[key]["start_value_jpy"] += asset.value_jpy
+        # source をキーに含めると、v4 切替をまたぐ月で同じ資産が別バケットへ分かれ、
+        # 全額消滅と新規出現が並ぶ架空の構造変化になる。区分不能なら source では割らない。
+        # 通常は MonthlyEngine が該当月を止めるが、curator 単体で呼ばれた場合の防御を残す。
+        breakdown = resolve_source_breakdown(ordered)
+        by_source = breakdown == SOURCE_BREAKDOWN_BY_SOURCE
 
-        for asset in end_ledger.assets:
-            key = self.__v4_bucket_key(asset.source, asset.asset_class)
-            buckets.setdefault(
-                key,
-                {
-                    "source": asset.source,
-                    "asset_class": asset.asset_class,
-                    "start_value_jpy": 0.0,
-                    "end_value_jpy": 0.0,
-                },
-            )
-            buckets[key]["end_value_jpy"] += asset.value_jpy
+        buckets: Dict[str, Dict[str, Any]] = {}
+        for ledger, side in ((start_ledger, "start_value_jpy"), (end_ledger, "end_value_jpy")):
+            for asset in ledger.assets:
+                key = self.__v4_bucket_key(asset.source, asset.asset_class) if by_source else asset.asset_class
+                bucket = buckets.setdefault(
+                    key,
+                    {
+                        "source": asset.source if by_source else None,
+                        "asset_class": asset.asset_class,
+                        "start_value_jpy": 0.0,
+                        "end_value_jpy": 0.0,
+                    },
+                )
+                bucket[side] += asset.value_jpy
 
         trends: List[Dict[str, Any]] = []
         for bucket in buckets.values():
@@ -145,21 +163,25 @@ class MonthlyCurator:
             change = end_value - start_value
             start_share = (start_value / start_total * 100) if start_total else 0.0
             end_share = (end_value / end_total * 100) if end_total else 0.0
-            trends.append(
+            row: Dict[str, Any] = {}
+            if by_source:
+                row["source"] = bucket["source"]
+            row.update(
                 {
-                    "source": bucket["source"],
                     "asset_class": bucket["asset_class"],
                     "start_value_jpy": round(start_value),
                     "end_value_jpy": round(end_value),
                     "change_jpy": round(change),
-                    "change_pct": round((change / start_value * 100), 2) if start_value else 0.0,
+                    # 母数がない増加を +0.00% と書くと符号と矛盾するため、率は出さない。
+                    "change_pct": round((change / start_value * 100), 2) if start_value else None,
                     "start_share_pct": round(start_share, 2),
                     "end_share_pct": round(end_share, 2),
                     "share_delta_pct": round(end_share - start_share, 2),
                 }
             )
+            trends.append(row)
 
-        trends.sort(key=lambda row: (row["source"], row["asset_class"]))
+        trends.sort(key=lambda row: (str(row.get("source") or ""), row["asset_class"]))
         total_change = end_total - start_total
         return {
             "ledger_days": len(ordered),
@@ -170,6 +192,7 @@ class MonthlyCurator:
             "total_change_jpy": round(total_change),
             "total_change_pct": round((total_change / start_total * 100), 2) if start_total else 0.0,
             "asset_class_trends": trends,
+            "source_breakdown": breakdown,
             # 月境界が暫定（STAGNANT）かどうかを隠さず残す。ADR-0002 は STAGNANT 中の
             # 更新を許容するため台帳自体は除外しないが、比較の確度は月次側で観測できる。
             "ledger_integrity": {
@@ -360,6 +383,7 @@ class MonthlyCurator:
                 "ledger_days": trend_summary.get("ledger_days", 0),
                 "metrics_days": metrics_summary.get("metrics_days", 0),
                 "asset_class_trends": trend_summary.get("asset_class_trends", []),
+                "source_breakdown": trend_summary.get("source_breakdown", SOURCE_BREAKDOWN_BY_SOURCE),
                 "ledger_integrity": trend_summary.get("ledger_integrity", {}),
                 "daily_context_summary": context_summary,
                 "daily_metrics_summary": metrics_summary,
