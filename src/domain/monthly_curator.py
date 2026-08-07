@@ -13,6 +13,7 @@ from src.config.prompts import (
     PROMPT_CHRONICLE_SYSTEM_V4,
     OUTPUT_SCHEMA_CHRONICLE_V4,
 )
+from src.domain.ledger_schema import MonthlyLedger
 from src.lib.models import LedgerSummary
 from src.lib.utils import SystemUtils
 
@@ -63,7 +64,7 @@ class MonthlyCurator:
     def generate_v4_chronicle(
         self,
         year_month: str,
-        ledgers: Optional[List[Dict[str, Any]]] = None,
+        ledgers: Optional[List[MonthlyLedger]] = None,
         insights: Optional[List[Dict[str, str]]] = None,
         daily_metrics: Optional[List[Dict[str, Any]]] = None,
         market_snapshots: Optional[List[Dict[str, Any]]] = None,
@@ -152,7 +153,7 @@ class MonthlyCurator:
         manager = knowledge_manager or self.__insight_reader
         return manager.extract_monthly_insights(year_month)
 
-    def __aggregate_v4_ledgers(self, ledgers: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def __aggregate_v4_ledgers(self, ledgers: List[MonthlyLedger]) -> Dict[str, Any]:
         if not ledgers:
             return {
                 "ledger_days": 0,
@@ -161,40 +162,45 @@ class MonthlyCurator:
                 "total_change_jpy": 0,
                 "total_change_pct": 0.0,
                 "asset_class_trends": [],
+                "ledger_integrity": {
+                    "start_status": "",
+                    "end_status": "",
+                    "stagnant_days": 0,
+                },
             }
 
-        ordered = sorted(ledgers, key=self.__ledger_target_date)
+        ordered = sorted(ledgers, key=lambda ledger: ledger.target_date)
         start_ledger = ordered[0]
         end_ledger = ordered[-1]
-        buckets: Dict[str, Dict[str, float]] = {}
-        start_total = self.__ledger_total_value(start_ledger)
-        end_total = self.__ledger_total_value(end_ledger)
+        buckets: Dict[str, Dict[str, Any]] = {}
+        start_total = start_ledger.total_value_jpy
+        end_total = end_ledger.total_value_jpy
 
-        for asset in start_ledger.get("assets", []) or []:
-            key = self.__v4_bucket_key(self.__asset_source(asset), self.__asset_class(asset))
+        for asset in start_ledger.assets:
+            key = self.__v4_bucket_key(asset.source, asset.asset_class)
             buckets.setdefault(
                 key,
                 {
-                    "source": self.__asset_source(asset),
-                    "asset_class": self.__asset_class(asset),
+                    "source": asset.source,
+                    "asset_class": asset.asset_class,
                     "start_value_jpy": 0.0,
                     "end_value_jpy": 0.0,
                 },
             )
-            buckets[key]["start_value_jpy"] += self.__asset_value(asset)
+            buckets[key]["start_value_jpy"] += asset.value_jpy
 
-        for asset in end_ledger.get("assets", []) or []:
-            key = self.__v4_bucket_key(self.__asset_source(asset), self.__asset_class(asset))
+        for asset in end_ledger.assets:
+            key = self.__v4_bucket_key(asset.source, asset.asset_class)
             buckets.setdefault(
                 key,
                 {
-                    "source": self.__asset_source(asset),
-                    "asset_class": self.__asset_class(asset),
+                    "source": asset.source,
+                    "asset_class": asset.asset_class,
                     "start_value_jpy": 0.0,
                     "end_value_jpy": 0.0,
                 },
             )
-            buckets[key]["end_value_jpy"] += self.__asset_value(asset)
+            buckets[key]["end_value_jpy"] += asset.value_jpy
 
         trends: List[Dict[str, Any]] = []
         for bucket in buckets.values():
@@ -221,35 +227,24 @@ class MonthlyCurator:
         total_change = end_total - start_total
         return {
             "ledger_days": len(ordered),
-            "start_date": self.__ledger_target_date(start_ledger),
-            "end_date": self.__ledger_target_date(end_ledger),
+            "start_date": start_ledger.target_date,
+            "end_date": end_ledger.target_date,
             "start_total_jpy": round(start_total),
             "end_total_jpy": round(end_total),
             "total_change_jpy": round(total_change),
             "total_change_pct": round((total_change / start_total * 100), 2) if start_total else 0.0,
             "asset_class_trends": trends,
+            # 月境界が暫定（STAGNANT）かどうかを隠さず残す。ADR-0002 は STAGNANT 中の
+            # 更新を許容するため台帳自体は除外しないが、比較の確度は月次側で観測できる。
+            "ledger_integrity": {
+                "start_status": start_ledger.integrity_status,
+                "end_status": end_ledger.integrity_status,
+                "stagnant_days": sum(1 for ledger in ordered if ledger.integrity_status == "STAGNANT"),
+            },
         }
 
     def __v4_bucket_key(self, source: str, asset_class: str) -> str:
         return f"{source}:{asset_class}"
-
-    def __ledger_target_date(self, ledger: Dict[str, Any]) -> str:
-        return str((ledger.get("meta") or {}).get("target_date", ""))
-
-    def __ledger_total_value(self, ledger: Dict[str, Any]) -> float:
-        total = (ledger.get("summary") or {}).get("total_assets_jpy")
-        if total is None:
-            return sum(self.__asset_value(asset) for asset in ledger.get("assets", []) or [])
-        return float(total)
-
-    def __asset_source(self, asset: Dict[str, Any]) -> str:
-        return str(asset.get("source", ""))
-
-    def __asset_class(self, asset: Dict[str, Any]) -> str:
-        return str(asset.get("asset_class", ""))
-
-    def __asset_value(self, asset: Dict[str, Any]) -> float:
-        return float(asset.get("value_jpy") or 0.0)
 
     def __build_v4_prompt(
         self,
@@ -416,6 +411,7 @@ class MonthlyCurator:
                 "ledger_days": trend_summary.get("ledger_days", 0),
                 "metrics_days": metrics_summary.get("metrics_days", 0),
                 "asset_class_trends": trend_summary.get("asset_class_trends", []),
+                "ledger_integrity": trend_summary.get("ledger_integrity", {}),
                 "daily_context_summary": context_summary,
                 "daily_metrics_summary": metrics_summary,
                 "market_snapshot_summary": market_snapshot_summary,

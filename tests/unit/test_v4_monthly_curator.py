@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from src.domain.ledger_schema import MonthlyLedger, parse_monthly_ledger
 from src.domain.monthly_curator import (
     MonthlyCurator,
     V4ChronicleBannedWordsViolation,
@@ -66,14 +67,28 @@ _MONTHLY_CHRONICLE_BANNED_WORDS = [
 ]
 
 
-def _ledger(day: str, stock_value: float, cash_value: float) -> dict:
-    """確定台帳（ledger_YYYYMMDD.json）の正本形状を返す。"""
+def _ledger(
+    day: str,
+    stock_value: float,
+    cash_value: float,
+    integrity_status: str = "VERIFIED",
+) -> MonthlyLedger:
+    """確定台帳（ledger_YYYYMMDD.json）から作る、月次用の検証済みモデルを返す。"""
+    return MonthlyLedger.model_validate(_ledger_document(day, stock_value, cash_value, integrity_status))
+
+
+def _ledger_document(
+    day: str,
+    stock_value: float,
+    cash_value: float,
+    integrity_status: str = "VERIFIED",
+) -> dict:
     return {
         "meta": {
             "generated_at": f"2026-04-{day}T20:00:00",
             "target_date": f"2026-04-{day}",
             "version": "4.3-v4",
-            "integrity_status": "VERIFIED",
+            "integrity_status": integrity_status,
             "has_next_day_record": False,
         },
         "summary": {"total_assets_jpy": stock_value + cash_value},
@@ -465,6 +480,53 @@ def test_generate_v4_chronicle_prefers_ledger_trend_over_daily_metrics_total_pat
     assert result["meta"]["ledger_days"] == 2
     assert result["meta"]["total_change_jpy"] == 30_000
     assert result["meta"]["total_change_pct"] == 20.0
+
+
+def test_generate_v4_chronicle_reports_ledger_integrity_of_month_boundaries() -> None:
+    # STAGNANT の台帳も比較対象に含めるが（ADR-0002）、暫定であることは meta に残す。
+    with patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
+            patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
+        transporter = MagicMock()
+        transporter.request_intelligence.return_value = _response()
+        curator = MonthlyCurator(transporter, MagicMock())
+
+        result = curator.generate_v4_chronicle(
+            "2026-04",
+            ledgers=[
+                _ledger("01", 100_000, 50_000),
+                _ledger("30", 120_000, 60_000, integrity_status="STAGNANT"),
+            ],
+            insights=[],
+        )
+
+    assert result["meta"]["ledger_days"] == 2
+    assert result["meta"]["ledger_integrity"] == {
+        "start_status": "VERIFIED",
+        "end_status": "STAGNANT",
+        "stagnant_days": 1,
+    }
+    prompt = transporter.request_intelligence.call_args[0][0]
+    assert "ledger_integrity" in prompt
+
+
+def test_generate_v4_chronicle_labels_legacy_assets_without_source() -> None:
+    # v3 系の台帳は source を持たない。空文字で素通りさせず UNSPECIFIED として集計する。
+    legacy_document = _ledger_document("01", 100_000, 50_000)
+    for asset in legacy_document["assets"]:
+        del asset["source"]
+    legacy_ledger = parse_monthly_ledger(legacy_document)
+    assert legacy_ledger is not None
+
+    with patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
+            patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
+        transporter = MagicMock()
+        transporter.request_intelligence.return_value = _response()
+        curator = MonthlyCurator(transporter, MagicMock())
+
+        result = curator.generate_v4_chronicle("2026-04", ledgers=[legacy_ledger], insights=[])
+
+    trends = result["meta"]["asset_class_trends"]
+    assert {row["source"] for row in trends} == {"UNSPECIFIED"}
 
 
 def test_generate_v4_chronicle_rejects_schema_mismatch() -> None:

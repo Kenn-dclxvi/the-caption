@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional, Protocol, Set, runtime_checkable
 
 import pandas as pd
 
+from src.domain.ledger_schema import MonthlyLedger
+
 
 @runtime_checkable
 class LedgerReader(Protocol):
@@ -16,8 +18,11 @@ class LedgerReader(Protocol):
     def load(self, date_str: str) -> Optional[Dict[str, Any]]:
         ...
 
-    def load_month(self, year_month: str) -> List[Dict[str, Any]]:
-        """対象月の確定台帳を target_date 昇順で返す。読めない月は空を返す。"""
+    def load_month(self, year_month: str) -> List[MonthlyLedger]:
+        """対象月の確定台帳を検証済みモデルとして target_date 昇順で返す。
+
+        読めない月・検証を通らない台帳は返さない（空を返す）。
+        """
         ...
 
 
