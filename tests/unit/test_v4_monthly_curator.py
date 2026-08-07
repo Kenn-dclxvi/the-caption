@@ -207,6 +207,40 @@ def test_generate_v4_chronicle_aggregates_dynamic_and_static_sources() -> None:
     assert "state_distribution" in prompt
 
 
+def test_generate_v4_chronicle_omits_qualitative_blocks_without_knowledge_bank() -> None:
+    """Knowledge Bank が空の月は、埋めるべき空欄として読まれないようタグごと落とす。"""
+    with patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
+            patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):
+        transporter = MagicMock()
+        transporter.request_intelligence.return_value = _response()
+        curator = MonthlyCurator(transporter, MagicMock())
+
+        result = curator.generate_v4_chronicle(
+            "2026-04",
+            ledgers=[_ledger("01", 100_000, 50_000), _ledger("30", 120_000, 60_000)],
+            insights=[],
+            daily_metrics=[
+                {
+                    "target_date": "2026-04-01",
+                    "total_value_jpy": 1_000_000,
+                    "market_units_value_jpy": 700_000,
+                    "absolute_amount_value_jpy": 300_000,
+                },
+            ],
+        )
+
+    full_prompt = transporter.request_intelligence.call_args[0][0]
+    # system 側の <input_contract> にも同名タグがあるため、user_payload だけを見る。
+    payload = full_prompt[full_prompt.index("<user_payload>"):]
+    assert "<daily_insights>" not in payload
+    assert "<daily_context_summary>" not in payload
+    # 数値系の入力だけで完結させる。
+    assert "<daily_metrics_summary>" in payload
+    assert "<market_snapshot_summary>" in payload
+    assert "<monthly_trend_data>" in payload
+    assert result["meta"]["ledger_days"] == 2
+
+
 def test_generate_v4_chronicle_uses_request_intelligence() -> None:
     with patch("src.domain.monthly_curator.PROMPT_CHRONICLE_SYSTEM_V4", _PROMPT_CHRONICLE_SYSTEM_V4), \
             patch("src.domain.monthly_curator.OUTPUT_SCHEMA_CHRONICLE_V4", _OUTPUT_SCHEMA_CHRONICLE_V4):

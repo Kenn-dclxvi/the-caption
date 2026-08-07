@@ -101,30 +101,35 @@ class MonthlyEngine:
                     logger.warning(f"[Guard] Cache missing for {year_month}")
 
             if not narrative_data:
+                # Knowledge Bank は補助入力に降格した。日次 v4 は record_insight を
+                # 呼ばないため空になり得るが、月次は数値系の入力だけで完結させる。
                 insights = self.__knowledge.extract_monthly_insights(year_month)
-                if len(daily_metrics) >= self.__V4_DAILY_METRICS_MIN_DAYS:
-                    month_ledgers = self.__repo.load_month(year_month)
-                    if not month_ledgers:
-                        message = f"No canonical ledger found for {year_month}; monthly chronicle aborted."
-                        logger.error(f"[Guard] {message}")
-                        logger.info("[Recovery] Action: Verify data/current/ledger_YYYYMMDD.json for the target month.")
-                        self.__notifier.system_alert(message, "LEDGER_MONTH_MISSING_MONTHLY")
-                        return
-                    narrative_data = self.__curator.generate_v4_chronicle(
-                        year_month,
-                        ledgers=month_ledgers,
-                        insights=insights,
-                        daily_metrics=daily_metrics,
-                        market_snapshots=market_snapshots,
-                        knowledge_manager=self.__knowledge,
+                if len(daily_metrics) < self.__V4_DAILY_METRICS_MIN_DAYS:
+                    message = (
+                        f"daily_metrics below threshold for {year_month} "
+                        f"({len(daily_metrics)}/{self.__V4_DAILY_METRICS_MIN_DAYS}); monthly chronicle aborted."
                     )
-                else:
-                    logger.info(
-                        "[V4] daily_metrics below threshold "
-                        f"({len(daily_metrics)}/{self.__V4_DAILY_METRICS_MIN_DAYS}); "
-                        "falling back to legacy monthly chronicle."
-                    )
-                    narrative_data = self.__curator.generate_monthly_chronicle(year_month, summary, insights)
+                    logger.error(f"[Guard] {message}")
+                    logger.info("[Recovery] Action: Verify data/current/daily_metrics_YYYYMMDD.json for the target month.")
+                    self.__notifier.system_alert(message, "DAILY_METRICS_INSUFFICIENT_MONTHLY")
+                    return
+
+                month_ledgers = self.__repo.load_month(year_month)
+                if not month_ledgers:
+                    message = f"No canonical ledger found for {year_month}; monthly chronicle aborted."
+                    logger.error(f"[Guard] {message}")
+                    logger.info("[Recovery] Action: Verify data/current/ledger_YYYYMMDD.json for the target month.")
+                    self.__notifier.system_alert(message, "LEDGER_MONTH_MISSING_MONTHLY")
+                    return
+
+                narrative_data = self.__curator.generate_v4_chronicle(
+                    year_month,
+                    ledgers=month_ledgers,
+                    insights=insights,
+                    daily_metrics=daily_metrics,
+                    market_snapshots=market_snapshots,
+                    knowledge_manager=self.__knowledge,
+                )
                 if narrative_data:
                     self.__chronicle_repo.save(narrative_data, year_month)
 

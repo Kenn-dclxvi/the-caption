@@ -80,9 +80,8 @@ def harness():
         guard.should_proceed.return_value = True
         repo.load.return_value = _SAMPLE_LEDGER_DICT
         knowledge.extract_monthly_insights.return_value = []
-        daily_metrics_repo.load_month.return_value = []
+        daily_metrics_repo.load_month.return_value = _daily_metrics_records(15)
         market_snapshot_repo.load_month.return_value = []
-        curator.generate_monthly_chronicle.return_value = _SAMPLE_NARRATIVE
         curator.generate_v4_chronicle.return_value = {
             "schema_version": "v4.1-monthly-chronicle",
             "chronicle": {
@@ -164,7 +163,6 @@ class TestMonthlyEngineGuardPath:
             engine.run()
 
         mocks["curator"].generate_v4_chronicle.assert_called_once()
-        mocks["curator"].generate_monthly_chronicle.assert_not_called()
         mocks["notifier"].monthly_report.assert_called_once()
         summary_vm = mocks["notifier"].monthly_report.call_args.args[1]
         assert isinstance(summary_vm, SummaryViewModel)
@@ -374,7 +372,6 @@ class TestMonthlyEngineNarrativePath:
         mocks["daily_metrics_repo"].load_month.assert_called_once_with("2026-01")
         mocks["curator"].generate_v4_chronicle.assert_called_once()
         mocks["market_snapshot_repo"].load_month.assert_called_once_with("2026-01")
-        mocks["curator"].generate_monthly_chronicle.assert_not_called()
         mocks["chronicle"].save.assert_called_once()
 
     def test_v4_chronicle_receives_market_snapshots(self, harness):
@@ -396,7 +393,7 @@ class TestMonthlyEngineNarrativePath:
         assert kwargs["daily_metrics"] == daily_metrics
         assert kwargs["market_snapshots"] == market_snapshots
 
-    def test_falls_back_to_legacy_chronicle_below_daily_metrics_threshold(self, harness):
+    def test_below_daily_metrics_threshold_aborts_before_chronicle_generation(self, harness):
         engine, mocks = harness
         mocks["chronicle"].exists.return_value = False
         mocks["daily_metrics_repo"].load_month.return_value = _daily_metrics_records(14)
@@ -404,8 +401,9 @@ class TestMonthlyEngineNarrativePath:
         engine.run()
 
         mocks["curator"].generate_v4_chronicle.assert_not_called()
-        mocks["curator"].generate_monthly_chronicle.assert_called_once()
-        mocks["chronicle"].save.assert_called_once()
+        mocks["chronicle"].save.assert_not_called()
+        mocks["notifier"].monthly_report.assert_not_called()
+        assert "DAILY_METRICS_INSUFFICIENT_MONTHLY" in mocks["notifier"].system_alert.call_args[0]
 
     def test_reuses_existing_chronicle_cache(self, harness):
         engine, mocks = harness
@@ -414,7 +412,6 @@ class TestMonthlyEngineNarrativePath:
         engine.run(reuse_context=True)
 
         mocks["curator"].generate_v4_chronicle.assert_not_called()
-        mocks["curator"].generate_monthly_chronicle.assert_not_called()
         mocks["chronicle"].load.assert_called_once()
 
     def test_reuse_context_false_regenerates_even_if_cache_exists(self, harness):
