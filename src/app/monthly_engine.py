@@ -13,7 +13,9 @@ from src.infra.daily_metrics_repository import DailyMetricsRepository
 from src.infra.market_snapshot_repository import MarketSnapshotRepository
 from src.lib.timeline_controller import TimelineController
 from src.domain.monthly_curator import (
+    SOURCE_BREAKDOWN_ASSET_CLASS_ONLY,
     MonthlyCurator,
+    resolve_source_breakdown,
     V4ChronicleBannedWordsViolation,
     V4ChronicleSchemaViolation,
 )
@@ -92,6 +94,20 @@ class MonthlyEngine:
                 summary = self.__build_summary_from_daily_metrics(daily_metrics)
             summary_vm = SummaryViewModel(summary)
 
+            # v4 で外部資産（ABSOLUTE_AMOUNT / SSOT B）が集計対象へ入る前の月は、
+            # 台帳が計算元区分を持たず総額の対象範囲も異なる。月次推移として比較が
+            # 成立しないため、キャッシュ再利用・強制送信を問わずここで止める。
+            month_ledgers = self.__repo.load_month(year_month)
+            if month_ledgers and resolve_source_breakdown(month_ledgers) == SOURCE_BREAKDOWN_ASSET_CLASS_ONLY:
+                message = (
+                    f"Ledgers for {year_month} predate the v4 scope change (no source breakdown); "
+                    "monthly comparison is not meaningful. Aborted."
+                )
+                logger.error(f"[Guard] {message}")
+                logger.info("[Recovery] Action: Monthly reports are supported from the first month whose ledgers carry `source`.")
+                self.__notifier.system_alert(message, "LEDGER_SCOPE_MISMATCH_MONTHLY")
+                return
+
             narrative_data = None
             if reuse_context:
                 if self.__chronicle_repo.exists(year_month):
@@ -114,7 +130,6 @@ class MonthlyEngine:
                     self.__notifier.system_alert(message, "DAILY_METRICS_INSUFFICIENT_MONTHLY")
                     return
 
-                month_ledgers = self.__repo.load_month(year_month)
                 if not month_ledgers:
                     message = f"No canonical ledger found for {year_month}; monthly chronicle aborted."
                     logger.error(f"[Guard] {message}")

@@ -50,6 +50,17 @@ def _daily_metrics_records(count: int):
     ]
 
 
+def _month_ledger(target_date: str, source: str = "MARKET_UNITS") -> MonthlyLedger:
+    """月次が受け取る確定台帳。既定は v4 の計算元区分を持つ形状。"""
+    return MonthlyLedger.model_validate(
+        {
+            "meta": {"target_date": target_date, "integrity_status": "VERIFIED"},
+            "summary": {"total_assets_jpy": 100_000},
+            "assets": [{"source": source, "asset_class": "US_STOCK", "value_jpy": 100_000}],
+        }
+    )
+
+
 @pytest.fixture
 def harness():
     with patch("src.app.monthly_engine.Notifier")           as MockNotifier,    \
@@ -79,6 +90,7 @@ def harness():
         timeline.get_previous_month_last_business_day.return_value = "2026-01-31"
         guard.should_proceed.return_value = True
         repo.load.return_value = _SAMPLE_LEDGER_DICT
+        repo.load_month.return_value = [_month_ledger("2026-01-05"), _month_ledger("2026-01-30")]
         knowledge.extract_monthly_insights.return_value = []
         daily_metrics_repo.load_month.return_value = _daily_metrics_records(15)
         market_snapshot_repo.load_month.return_value = []
@@ -330,6 +342,48 @@ class TestLedgerRepositoryLoadMonth:
 
 
 class TestMonthlyEngineNarrativePath:
+
+    def test_legacy_scope_month_aborts_before_chronicle_generation(self, harness):
+        engine, mocks = harness
+        mocks["daily_metrics_repo"].load_month.return_value = _daily_metrics_records(15)
+        mocks["repo"].load_month.return_value = [
+            _month_ledger("2026-01-05", "UNSPECIFIED"),
+            _month_ledger("2026-01-30", "MARKET_UNITS"),
+        ]
+
+        engine.run()
+
+        mocks["curator"].generate_v4_chronicle.assert_not_called()
+        mocks["notifier"].monthly_report.assert_not_called()
+        assert "LEDGER_SCOPE_MISMATCH_MONTHLY" in mocks["notifier"].system_alert.call_args[0]
+
+    def test_legacy_scope_month_aborts_even_with_cached_chronicle(self, harness):
+        # キャッシュ再利用でも比較の前提が崩れている月は送らない。
+        engine, mocks = harness
+        mocks["chronicle"].exists.return_value = True
+        mocks["repo"].load_month.return_value = [
+            _month_ledger("2026-01-05", "UNSPECIFIED"),
+            _month_ledger("2026-01-30", "UNSPECIFIED"),
+        ]
+
+        engine.run(reuse_context=True, force_send=True)
+
+        mocks["chronicle"].load.assert_not_called()
+        mocks["notifier"].monthly_report.assert_not_called()
+        assert "LEDGER_SCOPE_MISMATCH_MONTHLY" in mocks["notifier"].system_alert.call_args[0]
+
+    def test_scoped_month_proceeds_when_all_ledgers_carry_source(self, harness):
+        engine, mocks = harness
+        mocks["daily_metrics_repo"].load_month.return_value = _daily_metrics_records(15)
+        mocks["repo"].load_month.return_value = [
+            _month_ledger("2026-01-05", "MARKET_UNITS"),
+            _month_ledger("2026-01-30", "ABSOLUTE_AMOUNT"),
+        ]
+
+        engine.run()
+
+        mocks["curator"].generate_v4_chronicle.assert_called_once()
+        mocks["notifier"].monthly_report.assert_called_once()
 
     def test_v4_chronicle_receives_month_ledgers(self, harness):
         engine, mocks = harness

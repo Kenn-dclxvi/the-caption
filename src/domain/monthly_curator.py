@@ -21,6 +21,25 @@ SOURCE_BREAKDOWN_BY_SOURCE: Final[str] = "BY_SOURCE"
 SOURCE_BREAKDOWN_ASSET_CLASS_ONLY: Final[str] = "ASSET_CLASS_ONLY"
 
 
+def resolve_source_breakdown(ledgers: List[MonthlyLedger]) -> str:
+    """月境界の台帳が計算元区分（source）を持つかを判定する。
+
+    v3 系の台帳は source を持たない（UNSPECIFIED）。月初と月末のどちらかが
+    区分不能なら、MARKET_UNITS / ABSOLUTE_AMOUNT へ帰属させられない月とみなす。
+    """
+    if not ledgers:
+        return SOURCE_BREAKDOWN_BY_SOURCE
+
+    ordered = sorted(ledgers, key=lambda ledger: ledger.target_date)
+    boundaries = (ordered[0], ordered[-1])
+    has_unspecified = any(
+        asset.source == ASSET_SOURCE_UNSPECIFIED
+        for ledger in boundaries
+        for asset in ledger.assets
+    )
+    return SOURCE_BREAKDOWN_ASSET_CLASS_ONLY if has_unspecified else SOURCE_BREAKDOWN_BY_SOURCE
+
+
 class V4ChronicleSchemaViolation(RuntimeError):
     pass
 
@@ -116,14 +135,11 @@ class MonthlyCurator:
         start_total = start_ledger.total_value_jpy
         end_total = end_ledger.total_value_jpy
 
-        # v3 系の台帳は source を持たない（UNSPECIFIED）。source をキーに含めると
-        # v4 切替をまたぐ月で同じ資産が別バケットへ分かれ、全額消滅と新規出現が
-        # 並ぶ架空の構造変化になる。境界のどちらかが区分不能なら source では割らない。
-        by_source = not any(
-            asset.source == ASSET_SOURCE_UNSPECIFIED
-            for ledger in (start_ledger, end_ledger)
-            for asset in ledger.assets
-        )
+        # source をキーに含めると、v4 切替をまたぐ月で同じ資産が別バケットへ分かれ、
+        # 全額消滅と新規出現が並ぶ架空の構造変化になる。区分不能なら source では割らない。
+        # 通常は MonthlyEngine が該当月を止めるが、curator 単体で呼ばれた場合の防御を残す。
+        breakdown = resolve_source_breakdown(ordered)
+        by_source = breakdown == SOURCE_BREAKDOWN_BY_SOURCE
 
         buckets: Dict[str, Dict[str, Any]] = {}
         for ledger, side in ((start_ledger, "start_value_jpy"), (end_ledger, "end_value_jpy")):
@@ -176,7 +192,7 @@ class MonthlyCurator:
             "total_change_jpy": round(total_change),
             "total_change_pct": round((total_change / start_total * 100), 2) if start_total else 0.0,
             "asset_class_trends": trends,
-            "source_breakdown": SOURCE_BREAKDOWN_BY_SOURCE if by_source else SOURCE_BREAKDOWN_ASSET_CLASS_ONLY,
+            "source_breakdown": breakdown,
             # 月境界が暫定（STAGNANT）かどうかを隠さず残す。ADR-0002 は STAGNANT 中の
             # 更新を許容するため台帳自体は除外しないが、比較の確度は月次側で観測できる。
             "ledger_integrity": {
