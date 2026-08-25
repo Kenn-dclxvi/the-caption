@@ -16,7 +16,7 @@
     "express": "^5.1.0",
     "lucide-react": "^0.546.0",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1",
+    "react-dom": "^19.2.8",
     "vite": "^7.1.7"
   },
   "devDependencies": {
