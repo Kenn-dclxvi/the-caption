@@ -91,6 +91,7 @@ export class InputApiGateway {
       }, 30_000);
       this.pending.set(id, { resolve, timer });
       const packet = { id, method: req.method, path: req.path, headers: req.headers, body,
+        local_peer: ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress || ""),
         secure: req.secure, peer: req.ip || req.socket.remoteAddress || "local", ...extra };
       worker.stdin.write(JSON.stringify(packet) + "\n", (error) => {
         if (error) {

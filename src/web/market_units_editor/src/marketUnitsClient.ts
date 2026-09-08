@@ -26,6 +26,7 @@ export interface MarketUnitsDocument {
 }
 
 interface Session {
+  personal_mode?: boolean;
   authenticated: true;
   csrf_token: string;
   permissions: string[];
@@ -113,7 +114,7 @@ export class MarketUnitsStore {
       !this.state.loading && !this.state.saving && !this.state.pending && !this.state.needsRefresh;
   }
 
-  private async request(path: string, init: RequestInit = {}) {
+  private async request(path: string, init: RequestInit = {}, retrySession = true): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30000);
     try {
@@ -124,6 +125,15 @@ export class MarketUnitsStore {
         const problem = await response.json().catch(() => ({})) as {
           code?: string; detail?: string; errors?: { pointer: string; message: string }[];
         };
+        if (retrySession && path !== "/api/session" && this.state.session?.personal_mode &&
+            (response.status === 401 || (response.status === 403 && problem.code === "csrf_invalid"))) {
+          const renewed = await this.request("/api/session");
+          const session = await renewed.json() as Session;
+          this.update({ session });
+          const headers = new Headers(init.headers);
+          if (headers.has("X-CSRF-Token")) headers.set("X-CSRF-Token", session.csrf_token);
+          return this.request(path, { ...init, headers }, false);
+        }
         const fields = problem.errors?.map((error) => `${error.pointer || "Request"}: ${error.message}`).join("; ");
         const retryAfter = response.headers.get("Retry-After");
         const retryAt = retryAfter
@@ -146,6 +156,16 @@ export class MarketUnitsStore {
     return this.initialization;
   };
   requireSignIn = () => {
+    if (this.state.session?.personal_mode) {
+      void this.request("/api/session")
+        .then((response) => response.json())
+        .then((session: Session) => {
+          this.update({ session });
+          this.message("Connection renewed. Your draft is preserved; retry saving.", "info");
+        })
+        .catch((error) => this.handleReadError(error));
+      return;
+    }
     this.update({ session: null, sessionChecked: true });
     this.message("Your session has expired. Sign in to continue. Existing drafts remain in this tab.", "info");
   };

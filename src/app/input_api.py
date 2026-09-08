@@ -16,7 +16,7 @@ from typing import Callable
 import uuid
 
 from src.domain.input_api_auth import (
-    CredentialPolicyError, Principal, credential_principals,
+    CredentialPolicyError, OWNER_PERMISSIONS, Principal, credential_principals,
     principal_for_session, principal_for_token,
 )
 from src.domain.market_units_input import MarketUnitsInputError, validate_replacement
@@ -74,12 +74,17 @@ def strict_json(raw: str):
 
 class InputApi:
     def __init__(self, repository, credential_file, *, allowed_price_hosts=None,
-                 clock: Callable[[], float] = time.time, requests_per_minute: int = 240):
+                 clock: Callable[[], float] = time.time, requests_per_minute: int = 240, personal_origins=None,
+                 session_namespace: str = ""):
+        if not isinstance(session_namespace, str) or not re.fullmatch(r"[A-Za-z0-9_-]{0,64}", session_namespace):
+            raise ValueError("session_namespace must contain at most 64 ASCII letters, digits, underscores or hyphens")
+        self.session_cookie_name = "caption_session" + (f"_{session_namespace}" if session_namespace else "")
         self.repository = repository
         self.credential_file = credential_file
         self.allowed_price_hosts = set(allowed_price_hosts or ())
         self.clock = clock
         self.requests_per_minute = requests_per_minute
+        self.personal_origins = set(personal_origins or ())
         self._sessions = {}
         self._active = set()
         self._rates = {}
@@ -106,11 +111,11 @@ class InputApi:
     def _session_id(self, headers) -> str | None:
         try:
             raw = headers.get("cookie", "")
-            if len(re.findall(r"(?:^|;)\s*caption_session=", raw)) > 1:
+            if len(re.findall(rf"(?:^|;)\s*{re.escape(self.session_cookie_name)}=", raw)) > 1:
                 raise ValueError("duplicate session cookie")
             jar = SimpleCookie()
             jar.load(raw)
-            return jar["caption_session"].value if "caption_session" in jar else None
+            return jar[self.session_cookie_name].value if self.session_cookie_name in jar else None
         except Exception as exc:
             raise ApiError(400, "invalid_request", "session cookieが不正です。") from exc
 
@@ -118,15 +123,18 @@ class InputApi:
         token, sid = self._bearer(headers), self._session_id(headers)
         if token is not None and sid is not None:
             raise ApiError(400, "invalid_request", "Bearerとsessionを同時に指定できません。")
-        document = self._credentials()
+        document = None if self.personal_origins else self._credentials()
         if token is not None:
-            principal = principal_for_token(document, token, self.clock())
+            principal = principal_for_token(document or self._credentials(), token, self.clock())
         else:
             with self._guard:
                 session = self._sessions.get(sid)
             principal = None
             if session and session["expires_at"] > self.clock():
-                principal = principal_for_session(document, session["token_id"], session["subject"], self.clock())
+                if session.get("personal") and self.personal_origins:
+                    principal = Principal("personal-ui", "personal-owner", OWNER_PERMISSIONS, session["expires_at"])
+                else:
+                    principal = principal_for_session(document or self._credentials(), session["token_id"], session["subject"], self.clock())
                 if principal and write and not hmac.compare_digest(
                     str(headers.get("x-csrf-token", "")), session["csrf_token"]
                 ):
@@ -167,7 +175,8 @@ class InputApi:
         headers = {str(k).lower(): str(v) for k, v in request.get("headers", {}).items()}
         if path in {"/api/v1/health", "/api/health"} and method == "GET":
             try:
-                self._credentials()
+                if not self.personal_origins:
+                    self._credentials()
                 status = 200
             except ApiError:
                 status = 503
@@ -179,7 +188,7 @@ class InputApi:
             raise ApiError(413, "payload_too_large", "入力は2 MiB以下にしてください。")
         write = method in {"PUT", "POST", "PATCH", "DELETE"}
         if path == "/api/session":
-            return self._session(method, headers, request.get("secure", False))
+            return self._session(method, headers, request.get("secure", False), request.get("local_peer", False))
         principal = self._authenticate(headers, write=write)
         if request.get("kind") == "authorize":
             self._require(principal, request.get("permissions", []))
@@ -306,28 +315,26 @@ class InputApi:
             session.commit(write_csv=write_csv)
             return result
 
-    def _session(self, method, headers, secure):
+    def _session(self, method, headers, secure, local_peer=False):
+        origin = ("https://" if secure else "http://") + headers.get("host", "")
+        personal = (local_peer and origin in self.personal_origins
+                    and headers.get("origin", origin) == origin
+                    and headers.get("sec-fetch-site", "none") in {"same-origin", "none"})
+        if method == "GET" and personal and "authorization" not in headers:
+            try:
+                self._authenticate(headers)
+            except ApiError as exc:
+                if exc.status != 401:
+                    raise
+                principal = Principal("personal-ui", "personal-owner", OWNER_PERMISSIONS, self.clock() + 8 * 3600)
+                return self._create_session(principal, headers, secure, personal=True)
         if method == "POST":
             # Login explicitly exchanges a bearer credential and replaces an old cookie.
             token = self._bearer(headers)
             principal = principal_for_token(self._credentials(), token or "", self.clock())
             if principal is None:
                 raise ApiError(401, "authentication_required", "アクセストークンを確認してください。")
-            sid, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-            expiry = min(principal.expires_at, self.clock() + 8 * 3600)
-            with self._guard:
-                self._sessions = {k: v for k, v in self._sessions.items() if v["expires_at"] > self.clock()}
-                old = self._session_id(headers)
-                self._sessions.pop(old, None)
-                if len(self._sessions) >= 1000:
-                    raise ApiError(429, "rate_limited", "session数の上限に達しています。")
-                self._sessions[sid] = {"token_id": principal.token_id, "subject": principal.subject,
-                                       "expires_at": expiry, "csrf_token": csrf}
-            cookie = f"caption_session={sid}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max(0, int(expiry - self.clock()))}"
-            if secure:
-                cookie += "; Secure"
-            return response(200, {"authenticated": True, "csrf_token": csrf,
-                                  "permissions": sorted(principal.permissions)}, {"Set-Cookie": cookie})
+            return self._create_session(principal, headers, secure)
         if method not in {"GET", "DELETE"}:
             raise ApiError(405, "method_not_allowed", "GET、POST、DELETEを使用してください。")
         principal = self._authenticate(headers, write=method == "DELETE")
@@ -339,6 +346,23 @@ class InputApi:
             if method == "DELETE":
                 del self._sessions[sid]
         if method == "DELETE":
-            return response(204, headers={"Set-Cookie": "caption_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"})
+            return response(204, headers={"Set-Cookie": f"{self.session_cookie_name}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"})
         return response(200, {"authenticated": True, "csrf_token": session["csrf_token"],
-                              "permissions": sorted(principal.permissions)})
+                              "permissions": sorted(principal.permissions), "personal_mode": session.get("personal", False)})
+
+    def _create_session(self, principal, headers, secure, *, personal=False):
+        sid, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+        expiry = min(principal.expires_at, self.clock() + 8 * 3600)
+        with self._guard:
+            self._sessions = {k: v for k, v in self._sessions.items() if v["expires_at"] > self.clock()}
+            old = self._session_id(headers)
+            self._sessions.pop(old, None)
+            if len(self._sessions) >= 1000:
+                raise ApiError(429, "rate_limited", "session数の上限に達しています。")
+            self._sessions[sid] = {"token_id": principal.token_id, "subject": principal.subject,
+                                   "expires_at": expiry, "csrf_token": csrf, "personal": personal}
+        cookie = f"{self.session_cookie_name}={sid}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max(0, int(expiry - self.clock()))}"
+        if secure:
+            cookie += "; Secure"
+        return response(200, {"authenticated": True, "csrf_token": csrf,
+                              "permissions": sorted(principal.permissions), "personal_mode": personal}, {"Set-Cookie": cookie})

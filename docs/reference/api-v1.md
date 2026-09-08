@@ -105,6 +105,8 @@ PUTの正規化・新ID付与は入力表現の変換になるため、成功PUT
 
 ## 7. 認証と機密情報
 
+個人用WebUIでは、Tailscale内から利用するoriginを `CAPTION_PERSONAL_UI_ORIGINS` へ指定し、token入力なしでbrowserSessionを初期化できる。実接続元がloopbackで、HostとOriginが指定originに一致する要求だけを許可する。指定originへアクセスできる利用者をpersonal-ownerとして扱い、cookie・CSRF・競合制御は維持する。この設定を省略した環境はtokenログインを使う。外部API clientのBearer認証はどちらの構成でも維持する。
+
 serviceTokenまたはbrowserSessionのどちらか一つを使用する。OpenAPIのsecurity配列はORであり、同時に送った場合は400とする。OAuth flowやJWT形式を仮定しない。THE CAPTIONの資格情報とMonexの資格情報を混同しない。
 
 cookie方式のPUTは `X-CSRF-Token` を必須とする。OpenAPI上のparameterは任意表記だが、`x-required-with=browserSession` と共通規則に従う条件付き必須項目である。Bearerだけの場合は不要。sessionはHttpOnly、HTTPSではSecure、SameSite=Strictとする。tokenはローカル管理CLIで発行・失効し、digestだけを資格情報ファイルに保存する。ブラウザはBearerを `POST /api/session` で交換する。この認証bootstrapだけは古いcookieとBearerを受け入れてsessionを置き換える。業務APIの認証方式ORは変わらない。

@@ -24,6 +24,8 @@ def main():
     service = InputApi(
         MarketUnitsInputRepository(args.csv_path),
         CredentialFile(os.environ.get("CAPTION_API_CREDENTIALS_FILE")),
+        session_namespace=os.environ.get("CAPTION_API_SESSION_NAMESPACE", ""),
+        personal_origins={origin.strip().rstrip("/") for origin in os.environ.get("CAPTION_PERSONAL_UI_ORIGINS", "").split(",") if origin.strip()},
         allowed_price_hosts={host.strip().lower() for host in os.environ.get("CAPTION_API_PRICE_HOSTS", "").split(",") if host.strip()},
     )
     output_lock = threading.Lock()

@@ -39,7 +39,8 @@ def replacement(document, *, clear_all=False):
 
 
 class ApiFixture:
-    def __init__(self, directory):
+    def __init__(self, directory, *, session_namespace=""):
+        self.session_namespace = session_namespace
         self.csv_path = directory / "market_units.csv"
         self.credentials_path = directory / "credentials.json"
         self.now = 1788825600.0
@@ -66,6 +67,7 @@ class ApiFixture:
     def reopen(self):
         self.repository = MarketUnitsInputRepository(self.csv_path)
         self.api = InputApi(self.repository, CredentialFile(str(self.credentials_path)),
+                            session_namespace=self.session_namespace,
                             clock=lambda: self.now, allowed_price_hosts={"prices.example.com"})
 
     def request(self, method="GET", *, path=PATH, body="", headers=None, token=TOKEN, **extra):
@@ -465,11 +467,14 @@ def login(service, *, secure=False):
     assert result["status"] == 200, result
     cookie = SimpleCookie()
     cookie.load(result["headers"]["Set-Cookie"])
-    sid = cookie["caption_session"].value
-    return result, f"caption_session={sid}"
+    name = service.api.session_cookie_name
+    sid = cookie[name].value
+    return result, f"{name}={sid}"
 
 
-def test_session_bootstrap_csrf_logout_and_cookie_attributes(service):
+@pytest.mark.parametrize("namespace", ["", "prd", "dev"])
+def test_session_bootstrap_csrf_logout_and_cookie_attributes(tmp_path, namespace):
+    service = ApiFixture(tmp_path, session_namespace=namespace)
     logged_in, cookie = login(service, secure=True)
     cookie_header = logged_in["headers"]["Set-Cookie"]
     assert all(part in cookie_header for part in ["HttpOnly", "SameSite=Strict", "Secure", "Path=/"])
@@ -492,7 +497,26 @@ def test_session_bootstrap_csrf_logout_and_cookie_attributes(service):
         headers={"Cookie": cookie, "X-CSRF-Token": csrf})
     assert logged_out["status"] == 204
     assert "Max-Age=0" in logged_out["headers"]["Set-Cookie"]
+    assert logged_out["headers"]["Set-Cookie"].startswith(f"{service.api.session_cookie_name}=;")
     assert_problem(service.request(token=None, headers={"Cookie": cookie}), 401, "authentication_required")
+
+
+@pytest.mark.parametrize("namespace", ["prd", "dev"])
+def test_session_cookie_namespace_filters_and_rejects_own_duplicates(tmp_path, namespace):
+    service = ApiFixture(tmp_path, session_namespace=namespace)
+    _, cookie = login(service)
+    other = "dev" if namespace == "prd" else "prd"
+    unrelated = f"caption_session=legacy; caption_session_{other}=other"
+    assert service.request(token=None, headers={"Cookie": f"{unrelated}; {cookie}"})["status"] == 200
+    assert_problem(service.request(token=None, headers={"Cookie": unrelated}), 401, "authentication_required")
+    assert_problem(service.request(token=None, headers={"Cookie": f"{cookie}; {cookie}"}), 400, "invalid_request")
+    assert service.request(token=None, headers={"Cookie": f"{unrelated}; {unrelated}; {cookie}"})["status"] == 200
+
+
+@pytest.mark.parametrize("namespace", ["bad;name", "bad=name", "bad\r\nname", "a" * 65, None])
+def test_session_namespace_rejects_invalid_cookie_names(namespace):
+    with pytest.raises(ValueError, match="session_namespace"):
+        InputApi(None, None, session_namespace=namespace)
 
 
 @pytest.mark.parametrize("method", ["GET", "PUT"])
@@ -600,3 +624,57 @@ def test_same_request_in_progress_returns_retry_after_without_second_write(servi
             release.set()
         assert first.result(timeout=10)["status"] == 200
     assert len(service.state()["changes"]) == 1
+
+
+def personal_request(service, *, headers=None, local_peer=True):
+    return service.request(path='/api/session', token=None, secure=True, local_peer=local_peer,
+                           headers={'Host': 'caption.example:3101', **(headers or {})})
+
+
+def test_personal_ui_bootstraps_without_token_file_and_preserves_csrf(service):
+    service.api.personal_origins = {'https://caption.example:3101'}
+    service.credentials_path.unlink()
+    result = personal_request(service)
+    assert result['status'] == 200
+    assert result['body']['personal_mode'] is True
+    jar = SimpleCookie(result['headers']['Set-Cookie'])
+    cookie = f"caption_session={jar['caption_session'].value}"
+    headers = {'Cookie': cookie}
+    current = service.request(token=None, headers=headers)
+    assert current['status'] == 200
+    denied = service.put({'items': [], 'clear_all': True}, current['headers']['ETag'], token=None, headers=headers)
+    assert_problem(denied, 403, 'csrf_invalid')
+    saved = service.put({'items': [], 'clear_all': True}, current['headers']['ETag'], token=None,
+                        headers={**headers, 'X-CSRF-Token': result['body']['csrf_token']})
+    assert saved['status'] == 200
+    assert service.state()['changes'][-1]['subject'] == 'personal-owner'
+    service.now += 8 * 3600 + 1
+    renewed = personal_request(service, headers=headers)
+    assert renewed['status'] == 200
+    assert renewed['body']['csrf_token'] != result['body']['csrf_token']
+
+
+@pytest.mark.parametrize('headers,local_peer', [
+    ({'Host': 'evil.example'}, True),
+    ({'Origin': 'https://evil.example'}, True),
+    ({'Sec-Fetch-Site': 'cross-site'}, True),
+    ({'Sec-Fetch-Site': 'same-site'}, True),
+    ({}, False),
+])
+def test_personal_ui_rejects_untrusted_bootstrap(service, headers, local_peer):
+    service.api.personal_origins = {'https://caption.example:3101'}
+    result = personal_request(service, headers=headers, local_peer=local_peer)
+    assert result['status'] == 401
+    assert 'Set-Cookie' not in result['headers']
+
+
+def test_personal_mode_does_not_bypass_api_bearer_or_cookie_auth(service):
+    service.api.personal_origins = {'https://caption.example:3101'}
+    assert service.request(token=None)['status'] == 401
+    assert service.request(token='invalid_bearer_token_0123456789')['status'] == 401
+    assert service.request()['status'] == 200
+    assert personal_request(service, headers={'Authorization': 'Bearer invalid_bearer_token_0123456789'})['status'] == 401
+
+
+def test_personal_bootstrap_is_disabled_by_default(service):
+    assert personal_request(service)['status'] == 401

@@ -401,3 +401,43 @@ test('an empty replacement requires explicit confirmation and sends clear_all tr
   assert.equal(store.getSnapshot().dirty, false);
   assert.equal(transport.remaining(), 0);
 });
+
+test('personal UI renews an expired browser session without token entry', async () => {
+  const personal = () => json({ authenticated: true, personal_mode: true,
+    csrf_token: CSRF, permissions: ['market-units:read', 'market-units:replace'] });
+  const transport = script(personal(), json(resource(), 200, { ETag: ETAG }),
+    json({ code: 'authentication_required' }, 401), personal(), json(resource(), 200, { ETag: ETAG }));
+  const store = makeStore(transport.fetcher);
+  await store.initialize();
+  await store.refresh();
+  assert.equal(store.getSnapshot().session?.personal_mode, true);
+  assert.equal(store.getSnapshot().notice, null);
+  assert.deepEqual(transport.calls.map(c => `${c.method} ${c.url}`), [
+    'GET /api/session', 'GET /api/v1/market-units', 'GET /api/v1/market-units',
+    'GET /api/session', 'GET /api/v1/market-units',
+  ]);
+});
+
+test('personal UI renews CSRF and retries exactly the same pending save', async () => {
+  const personal = (csrf: string) => json({ authenticated: true, personal_mode: true,
+    csrf_token: csrf, permissions: ['market-units:read', 'market-units:replace'] });
+  const original = resource([wireRow()]);
+  const saved = resource([wireRow(ID_A, {units: '2'})], 'rev_2');
+  const transport = script(personal('old-csrf'), json(original, 200, {ETag: ETAG}),
+    json({code: 'csrf_invalid'}, 403), personal('renewed-csrf'),
+    succeeded(saved), json(saved, 200, {ETag: '"revision-two"'}));
+  const store = makeStore(transport.fetcher);
+  await store.initialize();
+  store.openForm(ID_A);
+  store.updateForm({units: '2'});
+  store.applyForm();
+  await store.save();
+  const puts = transport.calls.filter(c => c.method === 'PUT');
+  assert.equal(puts.length, 2);
+  assert.equal(puts[0].body, puts[1].body);
+  assert.equal(puts[0].headers.get('Idempotency-Key'), puts[1].headers.get('Idempotency-Key'));
+  assert.equal(puts[0].headers.get('If-Match'), puts[1].headers.get('If-Match'));
+  assert.equal(puts[1].headers.get('X-CSRF-Token'), 'renewed-csrf');
+  assert.equal(store.getSnapshot().pending, null);
+  assert.equal(store.getSnapshot().dirty, false);
+});

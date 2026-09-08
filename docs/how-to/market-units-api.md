@@ -2,7 +2,13 @@
 
 2026-09-08時点では、Market UnitsのGET/PUT、入力定義、health、WebUIのセッション認証を実装している。External Assets / Portfolio Basisのv1 APIとprivate自動入力は後続段階。[API契約](../reference/api-v1.md)と[分離設計](../adr/ADR-0008-caption-api-and-private-importer.md)を参照する。
 
-## 1. 資格情報の作成
+## 個人利用：ログイン不要のWebUI
+
+Tailscale Serveで公開する個人用WebUIは、`CAPTION_PERSONAL_UI_ORIGINS` に利用するoriginを正確に指定して起動する。例は `https://<自分のTailscale DNS名>:3101`。複数指定はカンマ区切り。WebUIを開くだけで利用でき、アクセストークンの入力は不要。通常のAPI clientは引き続きBearer tokenを利用する。
+
+この設定は指定originにアクセスできる人を所有者として扱うため、個人のTailscale内で使用する。HTTP入口はloopbackにbindし、Tailscale Serveから中継する。自動初期化は実際のloopback接続・指定Host・同一originの要求に限る。ブラウザの保護用cookieとCSRFは内部で管理し、期限切れ時は自動更新する。資格情報ファイルがなくても個人用WebUIは利用できる。設定を省略した環境では従来のtokenログインを維持する。
+
+## 1. API client用の資格情報の作成
 
 リポジトリルートで仮想環境を有効にし、Git管理外の資格情報ファイルを指定する。
 
