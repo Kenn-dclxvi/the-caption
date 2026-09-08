@@ -145,7 +145,7 @@ class MonthlyInputRepository:
                     for entry in entries(months, self.resource):
                         entry["entry_id"] = str(uuid4())
                     state = {"resource": self.resource, "document": {
-                        "revision": str(uuid4()), "storage_state": "uninitialized" if raw is None else "ready",
+                        "revision": "rev_" + uuid4().hex, "storage_state": "uninitialized" if raw is None else "ready",
                         "updated_at": None if raw is None else datetime.now(timezone.utc).isoformat(), "months": months},
                         "data_hash": _optional_digest(raw), "receipts": {}, "changes": []}
                     self._write(state, raw, raw_state, raw)

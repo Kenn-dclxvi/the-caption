@@ -7,6 +7,9 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from jsonschema import Draft202012Validator
+from referencing import Registry, Resource
+from referencing.jsonschema import DRAFT202012
 
 from src.app.input_api import InputApi
 from src.domain.input_api_auth import OWNER_PERMISSIONS, token_digest
@@ -65,6 +68,43 @@ class MonthlyApi:
 @pytest.fixture(params=["external-assets", "portfolio-basis"])
 def monthly(tmp_path, request):
     return MonthlyApi(tmp_path, request.param)
+
+
+@pytest.mark.parametrize("existing", [False, True], ids=["uninitialized", "migration"])
+def test_monthly_initial_and_persisted_responses_match_openapi(monthly, existing):
+    spec = json.loads((Path(__file__).resolve().parents[2] / "docs/reference/openapi-v1.json").read_text())
+    uri = "urn:caption:openapi"
+    registry = Registry().with_resource(uri, Resource(contents=spec, specification=DRAFT202012))
+
+    def validate(response, method):
+        assert response["status"] == 200, response
+        path = monthly.path.removeprefix(spec["servers"][0]["url"])
+        schema = spec["paths"][path][method]["responses"]["200"]["content"]["application/json"]["schema"]
+        Draft202012Validator({"$ref": uri + schema["$ref"]}, registry=registry).validate(response["body"])
+
+    if existing:
+        row = {key: value for key, value in monthly.row().items() if key != "entry_id"}
+        source = json.dumps({"default": {"items": [row]} if monthly.resource == "external-assets" else row}).encode()
+        monthly.file.write_bytes(source)
+    initial = monthly.get()
+    validate(initial, "get")
+    assert initial["body"]["storage_state"] == ("ready" if existing else "uninitialized")
+    restarted = MonthlyApi(monthly.file.parent, monthly.resource)
+    repeated = restarted.get()
+    validate(repeated, "get")
+    assert repeated["body"] == initial["body"]
+    if existing:
+        unchanged = restarted.put({"months": deepcopy(initial["body"]["months"]), "clear_all": False},
+                                  repeated["headers"]["ETag"])
+        validate(unchanged, "put")
+        assert unchanged["body"]["changed"] is False
+        assert unchanged["body"]["resource"] == initial["body"]
+        final = restarted.get()
+        validate(final, "get")
+        assert final["body"] == initial["body"]
+        assert monthly.file.read_bytes() == source
+    else:
+        assert not monthly.file.exists()
 
 
 def test_monthly_uninitialized_save_exact_values_move_and_replay(monthly):
