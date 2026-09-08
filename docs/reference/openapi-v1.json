@@ -1,0 +1,2530 @@
+{
+  "openapi": "3.1.1",
+  "jsonSchemaDialect": "https://spec.openapis.org/oas/3.1/dialect/base",
+  "info": {
+    "title": "THE CAPTION 資産入力 API",
+    "version": "0.1.0",
+    "description": "段階Bの部分実装。Market Units GET/PUT、input-schema、healthを実装。External Assets/Portfolio Basisは契約案でv1未実装。汎用取込・入力元管理・Monex接続は後続段階。HTTPとデータの共通規則・UI対応はapi-v1.mdを参照。"
+  },
+  "servers": [
+    {
+      "url": "/api/v1",
+      "description": "同一origin。開発用run.sh collection-web-devの既定はhttp://127.0.0.1:3101。"
+    }
+  ],
+  "security": [
+    {
+      "serviceToken": []
+    },
+    {
+      "browserSession": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Market Units"
+    },
+    {
+      "name": "External Assets"
+    },
+    {
+      "name": "Portfolio Basis"
+    },
+    {
+      "name": "Metadata"
+    }
+  ],
+  "x-status": "partially-implemented",
+  "x-contract-scope": "ADR-0008 phase A; three UI resources only",
+  "x-companion-document": "api-v1.md",
+  "x-common-rules": {
+    "auth": "serviceToken OR browserSession。両方を同時に送ると400。各operationのx-required-permissionsはAND条件。session書込みにはX-CSRF-Tokenも必要。",
+    "write": "PUTは1リソース単位で原子的。3回のPUTをまとめたtransactionとはしない。If-MatchとIdempotency-Key必須。空の全置換はclear_all=trueと追加clear権限が必要。",
+    "idempotency": "このAPI固有の構文（引用符なしUUID）。認証主体ID+method+正規path+keyで隔離し、JSON正準化本文+If-Matchをfingerprintに含める。再認証後も同じ主体なら照合可能。JSON scalarは変換しない。現在の認証・必要権限を確認してから既知の完了記録を照合し、通常のIf-Match判定より先に元のstatus/bodyを再生する。結果は30日以上保持、以後はkey tombstoneにより409 idempotency_result_expiredを返し再実行しない。",
+    "replay": "同じkeyでfingerprint変更は409 idempotency_key_reused。実行中は409 idempotency_in_progress。503/通信切断時は新しいkeyを発行せず同じrequestで結果を確定する。",
+    "etag": "GETに強いETag。PUTは正規化・ID補完を伴うため成功応答にETag/Last-Modifiedを返さない。次回PUTのIf-Matchは成功後GETで取得する。レスポンスのrevisionはHTTP validatorではない。",
+    "storage": "読取りは登録済みrevisionに対応する一貫した内容。新規未初期化のみ仮想的な空document+ETagを返す。既存入力の消失・不正・未登録変更は503。エラーを空データへ変換しない。",
+    "limits": "request bodyはUTF-8で2 MiB以下。数字は整数部18桁以下・小数部12桁以下。超過は丸めず拒否。UI migration前に既存入力を検査し、非適合値を切捨て・ゼロ化しない。"
+  },
+  "paths": {
+    "/market-units": {
+      "get": {
+        "tags": [
+          "Market Units"
+        ],
+        "operationId": "getMarketUnits",
+        "summary": "Market Unitsの全入力を取得",
+        "description": "市場連動資産の登録済み全行を、一貫したrevisionのitems配列として取得する。保存順、7編集項目、不変asset_id、互換asset_keyを返す。IDはnullにならない。ページ分割しない。",
+        "x-required-permissions": [
+          "market-units:read"
+        ],
+        "responses": {
+          "200": {
+            "description": "一貫した入力document。ETagはこのdocumentの強いvalidator。",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketUnitsDocument"
+                },
+                "example": {
+                  "revision": "rev_mu_3",
+                  "storage_state": "ready",
+                  "updated_at": "2026-09-08T18:00:00+09:00",
+                  "items": [
+                    {
+                      "asset_id": "00000000-0000-4000-8000-000000000001",
+                      "name": "国内株サンプル",
+                      "asset_class": "JP_STOCK",
+                      "currency": "JPY",
+                      "units": "123",
+                      "source_symbol": "EXAMPLE",
+                      "audit_match_key": "sample-equity",
+                      "csv_url": "",
+                      "asset_key": "sample-equity"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-implementation-status": "implemented"
+      },
+      "put": {
+        "tags": [
+          "Market Units"
+        ],
+        "operationId": "replaceMarketUnits",
+        "summary": "Market Unitsの全入力を条件付きで置換",
+        "description": "配列順を保持する。全既存asset_idは同じresourceに存在し、一意であること。省略した既存IDは削除、nullは新規。互換asset_keyも正規化後に一意。enabled等の非UI既存metadataは保持する。 前後内容と履歴・再送結果は一緒に永続化する。失敗時に一部だけ保存しない。成功後はGETで正規化済み内容と次回ETagを取得。",
+        "x-required-permissions": [
+          "market-units:read",
+          "market-units:replace"
+        ],
+        "x-conditional-permissions": [
+          {
+            "when": "clear_all=true",
+            "allOf": [
+              "market-units:clear"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceMarketUnits"
+              },
+              "examples": {
+                "newEntry": {
+                  "summary": "架空の新規入力。既存行はIDを維持して併記する。",
+                  "value": {
+                    "items": [
+                      {
+                        "asset_id": null,
+                        "name": "国内株サンプル",
+                        "asset_class": "JP_STOCK",
+                        "currency": "JPY",
+                        "units": "123",
+                        "source_symbol": "EXAMPLE",
+                        "audit_match_key": "sample-equity",
+                        "csv_url": ""
+                      }
+                    ],
+                    "clear_all": false
+                  }
+                },
+                "clearAll": {
+                  "summary": "明示的な全消去。別clear権限が必要。",
+                  "value": {
+                    "items": [],
+                    "clear_all": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "保存結果または同一要求の再送結果。新IDも含めた全documentを返す。ETag/Last-Modifiedは付けない。resource.revisionはIf-Matchに転用しない。",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "Idempotency-Replayed": {
+                "$ref": "#/components/headers/Replay"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketUnitsReplacementResult"
+                },
+                "example": {
+                  "changed": true,
+                  "change_id": "00000000-0000-4000-8000-000000000050",
+                  "resource": {
+                    "revision": "rev_mu_3",
+                    "storage_state": "ready",
+                    "updated_at": "2026-09-08T18:00:00+09:00",
+                    "items": [
+                      {
+                        "asset_id": "00000000-0000-4000-8000-000000000001",
+                        "name": "国内株サンプル",
+                        "asset_class": "JP_STOCK",
+                        "currency": "JPY",
+                        "units": "123",
+                        "source_symbol": "EXAMPLE",
+                        "audit_match_key": "sample-equity",
+                        "csv_url": "",
+                        "asset_key": "sample-equity"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableContent"
+          },
+          "428": {
+            "$ref": "#/components/responses/PreconditionRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-implementation-status": "implemented"
+      }
+    },
+    "/external-assets": {
+      "get": {
+        "tags": [
+          "External Assets"
+        ],
+        "operationId": "getExternalAssets",
+        "summary": "External Assetsの全入力を取得",
+        "description": "外部資産の全月とdefaultを、一貫したrevisionのmonths mapとして取得する。各月の配列順と不変entry_idを返す。明示的な空月を保持する。ページ分割しない。",
+        "x-required-permissions": [
+          "external-assets:read"
+        ],
+        "responses": {
+          "200": {
+            "description": "一貫した入力document。ETagはこのdocumentの強いvalidator。",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalAssetsDocument"
+                },
+                "example": {
+                  "revision": "rev_ea_3",
+                  "storage_state": "ready",
+                  "updated_at": "2026-09-08T18:00:00+09:00",
+                  "months": {
+                    "2026-09": {
+                      "items": [
+                        {
+                          "entry_id": "00000000-0000-4000-8000-000000000001",
+                          "category": "CASH_EXTERNAL",
+                          "amount": "1000000",
+                          "name": "外部資産サンプル"
+                        }
+                      ]
+                    },
+                    "default": {
+                      "items": []
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-implementation-status": "proposed"
+      },
+      "put": {
+        "tags": [
+          "External Assets"
+        ],
+        "operationId": "replaceExternalAssets",
+        "summary": "External Assetsの全入力を条件付きで置換",
+        "description": "months map全体を置換。entry_idは全月で一意、移動時も保持。空の月items=[]はdefaultを抑止する明示入力として保持する。月key省略は削除。省略した既存IDは削除。各月の配列順を保持。全月総数5000以下。JPY絶対額のみ。 前後内容と履歴・再送結果は一緒に永続化する。失敗時に一部だけ保存しない。成功後はGETで正規化済み内容と次回ETagを取得。",
+        "x-required-permissions": [
+          "external-assets:read",
+          "external-assets:replace"
+        ],
+        "x-conditional-permissions": [
+          {
+            "when": "clear_all=true",
+            "allOf": [
+              "external-assets:clear"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceExternalAssets"
+              },
+              "examples": {
+                "newEntry": {
+                  "summary": "架空の新規入力。既存行はIDを維持して併記する。",
+                  "value": {
+                    "months": {
+                      "2026-09": {
+                        "items": [
+                          {
+                            "entry_id": null,
+                            "category": "CASH_EXTERNAL",
+                            "amount": "1000000",
+                            "name": "外部資産サンプル"
+                          }
+                        ]
+                      },
+                      "default": {
+                        "items": []
+                      }
+                    },
+                    "clear_all": false
+                  }
+                },
+                "clearAll": {
+                  "summary": "明示的な全消去。別clear権限が必要。",
+                  "value": {
+                    "months": {},
+                    "clear_all": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "保存結果または同一要求の再送結果。新IDも含めた全documentを返す。ETag/Last-Modifiedは付けない。resource.revisionはIf-Matchに転用しない。",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "Idempotency-Replayed": {
+                "$ref": "#/components/headers/Replay"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalAssetsReplacementResult"
+                },
+                "example": {
+                  "changed": true,
+                  "change_id": "00000000-0000-4000-8000-000000000050",
+                  "resource": {
+                    "revision": "rev_ea_3",
+                    "storage_state": "ready",
+                    "updated_at": "2026-09-08T18:00:00+09:00",
+                    "months": {
+                      "2026-09": {
+                        "items": [
+                          {
+                            "entry_id": "00000000-0000-4000-8000-000000000001",
+                            "category": "CASH_EXTERNAL",
+                            "amount": "1000000",
+                            "name": "外部資産サンプル"
+                          }
+                        ]
+                      },
+                      "default": {
+                        "items": []
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableContent"
+          },
+          "428": {
+            "$ref": "#/components/responses/PreconditionRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-implementation-status": "proposed"
+      }
+    },
+    "/portfolio-basis": {
+      "get": {
+        "tags": [
+          "Portfolio Basis"
+        ],
+        "operationId": "getPortfolioBasis",
+        "summary": "Portfolio Basisの全入力を取得",
+        "description": "総取得原価の全月とdefaultを、一貫したrevisionのmonths mapとして取得する。月ごとの正の金額と不変entry_idを返す。ページ分割しない。",
+        "x-required-permissions": [
+          "portfolio-basis:read"
+        ],
+        "responses": {
+          "200": {
+            "description": "一貫した入力document。ETagはこのdocumentの強いvalidator。",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortfolioBasisDocument"
+                },
+                "example": {
+                  "revision": "rev_pb_3",
+                  "storage_state": "ready",
+                  "updated_at": "2026-09-08T18:00:00+09:00",
+                  "months": {
+                    "2026-09": {
+                      "entry_id": "00000000-0000-4000-8000-000000000002",
+                      "total_acquisition_cost_jpy": "1500000"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-implementation-status": "proposed"
+      },
+      "put": {
+        "tags": [
+          "Portfolio Basis"
+        ],
+        "operationId": "replacePortfolioBasis",
+        "summary": "Portfolio Basisの全入力を条件付きで置換",
+        "description": "months map全体を置換。entry_idは月を跨いで一意。月移動では元entry_idを維持し移動元keyを省略。既存移動先を置換する場合、そのIDはrequestから省略されるため明示的に削除される。未指定月やdefaultの意味を変えない。 前後内容と履歴・再送結果は一緒に永続化する。失敗時に一部だけ保存しない。成功後はGETで正規化済み内容と次回ETagを取得。",
+        "x-required-permissions": [
+          "portfolio-basis:read",
+          "portfolio-basis:replace"
+        ],
+        "x-conditional-permissions": [
+          {
+            "when": "clear_all=true",
+            "allOf": [
+              "portfolio-basis:clear"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplacePortfolioBasis"
+              },
+              "examples": {
+                "newEntry": {
+                  "summary": "架空の新規入力。既存行はIDを維持して併記する。",
+                  "value": {
+                    "months": {
+                      "2026-09": {
+                        "entry_id": null,
+                        "total_acquisition_cost_jpy": "1500000"
+                      }
+                    },
+                    "clear_all": false
+                  }
+                },
+                "clearAll": {
+                  "summary": "明示的な全消去。別clear権限が必要。",
+                  "value": {
+                    "months": {},
+                    "clear_all": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "保存結果または同一要求の再送結果。新IDも含めた全documentを返す。ETag/Last-Modifiedは付けない。resource.revisionはIf-Matchに転用しない。",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "Idempotency-Replayed": {
+                "$ref": "#/components/headers/Replay"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortfolioBasisReplacementResult"
+                },
+                "example": {
+                  "changed": true,
+                  "change_id": "00000000-0000-4000-8000-000000000050",
+                  "resource": {
+                    "revision": "rev_pb_3",
+                    "storage_state": "ready",
+                    "updated_at": "2026-09-08T18:00:00+09:00",
+                    "months": {
+                      "2026-09": {
+                        "entry_id": "00000000-0000-4000-8000-000000000002",
+                        "total_acquisition_cost_jpy": "1500000"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableContent"
+          },
+          "428": {
+            "$ref": "#/components/responses/PreconditionRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-implementation-status": "proposed"
+      }
+    },
+    "/input-schema": {
+      "get": {
+        "tags": [
+          "Metadata"
+        ],
+        "operationId": "getInputSchema",
+        "summary": "入力候補・制限・並び順を取得",
+        "description": "OpenAPIのschemaを補助する静的な表示定義。保有資産由来の候補は含めない。",
+        "x-required-permissions": [
+          "inputs:schema:read"
+        ],
+        "responses": {
+          "200": {
+            "description": "contract_versionがこのOpenAPIのinfo.versionと一致する入力定義。",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InputSchema"
+                },
+                "example": {
+                  "contract_version": "0.1.0",
+                  "suggested_asset_classes": [
+                    "MUTUAL_FUNDS",
+                    "JP_STOCK",
+                    "US_STOCK",
+                    "FX",
+                    "COMMODITIES"
+                  ],
+                  "suggested_external_categories": [
+                    "CASH_EXTERNAL"
+                  ],
+                  "month_order": "descending_default_last",
+                  "new_month_default": "latest_existing_non_default_or_default",
+                  "external_category_default": "CASH_EXTERNAL",
+                  "decimal_integer_digits": 18,
+                  "decimal_fraction_digits": 12,
+                  "max_market_units": 5000,
+                  "max_external_entries": 5000,
+                  "max_month_keys": 1200,
+                  "max_request_bytes": 2097152
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-implementation-status": "implemented"
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "Metadata"
+        ],
+        "operationId": "getHealth",
+        "summary": "最小限のAPI稼働状態を取得",
+        "security": [],
+        "x-required-permissions": [],
+        "responses": {
+          "200": {
+            "description": "APIが入力操作を受け付け可能。口座データ・内部path・依存先情報は返さない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                },
+                "example": {
+                  "status": "ok",
+                  "api_version": "v1",
+                  "contract_version": "0.1.0"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "APIは利用不能。",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                },
+                "example": {
+                  "status": "unavailable",
+                  "api_version": "v1",
+                  "contract_version": "0.1.0"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation-status": "implemented"
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "serviceToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "THE CAPTION専用の不透明token。JWT形式・OAuth flowを仮定しない。token発行/失効とsession作成はPhase Bの認証設計で別途固定。Monex用tokenは受理しない。"
+      },
+      "browserSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "caption_session",
+        "description": "認証済みWebUI session。HttpOnly、HTTPS環境ではSecure、SameSite=Strict。PUTはsessionにbindされたX-CSRF-Tokenを検証。"
+      }
+    },
+    "parameters": {
+      "IfMatch": {
+        "name": "If-Match",
+        "in": "header",
+        "required": true,
+        "description": "対象GETで受け取った強いETagを一つだけそのまま送る。欠落428、不一致412。弱いtag、*、tagのlistは400。",
+        "schema": {
+          "type": "string",
+          "pattern": "^\"[A-Za-z0-9:_-]+\"$"
+        },
+        "example": "\"mu:00000000-0000-4000-8000-000000000001:3\""
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "description": "引用符なしUUIDを一つ送る、このAPI固有の再送契約。新しい編集意図には新key、結果不明の再送には元keyを使用。",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "example": "00000000-0000-4000-8000-000000000010"
+      },
+      "CsrfToken": {
+        "name": "X-CSRF-Token",
+        "in": "header",
+        "required": false,
+        "description": "browserSessionでのPUTだけ必須。欠落・不一致は403 csrf_invalid。serviceTokenだけの場合は不要。",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "x-required-with": "browserSession"
+      }
+    },
+    "headers": {
+      "ETag": {
+        "description": "このリソース表現の強いvalidator。必ず引用符を含む。",
+        "schema": {
+          "type": "string",
+          "pattern": "^\"[A-Za-z0-9:_-]+\"$"
+        }
+      },
+      "NoStore": {
+        "description": "資産情報・session依存情報・エラーをキャッシュしない。",
+        "schema": {
+          "type": "string",
+          "const": "no-store"
+        }
+      },
+      "Replay": {
+        "description": "元のstatus/bodyを再生した場合true、初回結果ではfalse。",
+        "schema": {
+          "type": "boolean"
+        }
+      },
+      "RetryAfter": {
+        "description": "再試行までの秒数。",
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        }
+      },
+      "WWWAuthenticate": {
+        "description": "Bearer認証のchallenge。",
+        "schema": {
+          "type": "string",
+          "examples": [
+            "Bearer realm=\"caption\""
+          ]
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "不正JSON（重複object keyを含む）、不正header、認証方式の同時指定。",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "const": 400
+                    }
+                  }
+                }
+              ]
+            },
+            "example": {
+              "type": "about:blank",
+              "title": "Bad Request",
+              "status": 400,
+              "detail": "不正JSON（重複object keyを含む）、不正header、認証方式の同時指定。",
+              "instance": "urn:uuid:00000000-0000-4000-8000-000000000099",
+              "code": "invalid_request"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "認証なし・期限切れ。",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "WWW-Authenticate": {
+            "$ref": "#/components/headers/WWWAuthenticate"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "const": 401
+                    }
+                  }
+                }
+              ]
+            },
+            "example": {
+              "type": "about:blank",
+              "title": "Unauthorized",
+              "status": 401,
+              "detail": "認証なし・期限切れ。",
+              "instance": "urn:uuid:00000000-0000-4000-8000-000000000099",
+              "code": "authentication_required"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "権限不足、sessionのCSRF検証失敗。",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "const": 403
+                    }
+                  }
+                }
+              ]
+            },
+            "example": {
+              "type": "about:blank",
+              "title": "Forbidden",
+              "status": 403,
+              "detail": "権限不足、sessionのCSRF検証失敗。",
+              "instance": "urn:uuid:00000000-0000-4000-8000-000000000099",
+              "code": "permission_denied"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "Idempotency-Keyの内容不一致、処理中、保持済みkeyの結果期限切れ。",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "const": 409
+                    }
+                  }
+                }
+              ]
+            },
+            "example": {
+              "type": "about:blank",
+              "title": "Conflict",
+              "status": 409,
+              "detail": "Idempotency-Keyの内容不一致、処理中、保持済みkeyの結果期限切れ。",
+              "instance": "urn:uuid:00000000-0000-4000-8000-000000000099",
+              "code": "idempotency_key_reused"
+            }
+          }
+        }
+      },
+      "PreconditionFailed": {
+        "description": "対象GETのETagとIf-Matchが不一致。書込みなし。",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "const": 412
+                    }
+                  }
+                }
+              ]
+            },
+            "example": {
+              "type": "about:blank",
+              "title": "Precondition Failed",
+              "status": 412,
+              "detail": "対象GETのETagとIf-Matchが不一致。書込みなし。",
+              "instance": "urn:uuid:00000000-0000-4000-8000-000000000099",
+              "code": "revision_mismatch"
+            }
+          }
+        }
+      },
+      "PayloadTooLarge": {
+        "description": "request bodyが2 MiBを超過。",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "const": 413
+                    }
+                  }
+                }
+              ]
+            },
+            "example": {
+              "type": "about:blank",
+              "title": "Content Too Large",
+              "status": 413,
+              "detail": "request bodyが2 MiBを超過。",
+              "instance": "urn:uuid:00000000-0000-4000-8000-000000000099",
+              "code": "payload_too_large"
+            }
+          }
+        }
+      },
+      "UnsupportedMediaType": {
+        "description": "application/json以外のPUT body。",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "const": 415
+                    }
+                  }
+                }
+              ]
+            },
+            "example": {
+              "type": "about:blank",
+              "title": "Unsupported Media Type",
+              "status": 415,
+              "detail": "application/json以外のPUT body。",
+              "instance": "urn:uuid:00000000-0000-4000-8000-000000000099",
+              "code": "unsupported_media_type"
+            }
+          }
+        }
+      },
+      "UnprocessableContent": {
+        "description": "schemaまたはbusiness rule違反。fieldsはerrorsに列挙。",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "const": 422
+                    }
+                  }
+                }
+              ]
+            },
+            "example": {
+              "type": "about:blank",
+              "title": "Unprocessable Content",
+              "status": 422,
+              "detail": "schemaまたはbusiness rule違反。fieldsはerrorsに列挙。",
+              "instance": "urn:uuid:00000000-0000-4000-8000-000000000099",
+              "code": "invalid_input",
+              "errors": [
+                {
+                  "pointer": "/items/0/units",
+                  "code": "invalid_decimal",
+                  "message": "非負の10進文字列で指定してください。"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "PreconditionRequired": {
+        "description": "If-Match欠落。Idempotency-Key欠落は400。",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "const": 428
+                    }
+                  }
+                }
+              ]
+            },
+            "example": {
+              "type": "about:blank",
+              "title": "Precondition Required",
+              "status": 428,
+              "detail": "If-Match欠落。Idempotency-Key欠落は400。",
+              "instance": "urn:uuid:00000000-0000-4000-8000-000000000099",
+              "code": "precondition_required"
+            }
+          }
+        }
+      },
+      "TooManyRequests": {
+        "description": "rate limit。Retry-After後に同一requestを再送可能。",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "const": 429
+                    }
+                  }
+                }
+              ]
+            },
+            "example": {
+              "type": "about:blank",
+              "title": "Too Many Requests",
+              "status": 429,
+              "detail": "rate limit。Retry-After後に同一requestを再送可能。",
+              "instance": "urn:uuid:00000000-0000-4000-8000-000000000099",
+              "code": "rate_limited"
+            }
+          }
+        }
+      },
+      "InternalServerError": {
+        "description": "内部エラー。反映結果不明の場合は同じkeyで照合し新keyで再実行しない。",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "const": 500
+                    }
+                  }
+                }
+              ]
+            },
+            "example": {
+              "type": "about:blank",
+              "title": "Internal Server Error",
+              "status": 500,
+              "detail": "内部エラー。反映結果不明の場合は同じkeyで照合し新keyで再実行しない。",
+              "instance": "urn:uuid:00000000-0000-4000-8000-000000000099",
+              "code": "internal_error"
+            }
+          }
+        }
+      },
+      "ServiceUnavailable": {
+        "description": "入力保存領域が不正/利用不能/復旧中。空データへ置換しない。書込み結果不明なら同じkeyで再送。",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "const": 503
+                    }
+                  }
+                }
+              ]
+            },
+            "example": {
+              "type": "about:blank",
+              "title": "Service Unavailable",
+              "status": 503,
+              "detail": "入力保存領域が不正/利用不能/復旧中。空データへ置換しない。書込み結果不明なら同じkeyで再送。",
+              "instance": "urn:uuid:00000000-0000-4000-8000-000000000099",
+              "code": "input_store_unavailable"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Revision": {
+        "type": "string",
+        "description": "対象リソース内の不透明な版ID。GET表現または保存可能性に関係するメタデータが変わると更新される。If-Matchへ代入しない。",
+        "pattern": "^rev_[A-Za-z0-9_-]+$"
+      },
+      "Text": {
+        "type": "string",
+        "description": "前後空白をtrimして保存する文字列。",
+        "maxLength": 1024
+      },
+      "NonBlankText": {
+        "type": "string",
+        "description": "前後空白をtrimした後に空でないこと。制御文字は拒否する。",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "\\S"
+      },
+      "Decimal": {
+        "type": "string",
+        "description": "非負の10進文字列。指数、符号、桁区切り、空白、NaN、Infinity、JSON number/bool/null不可。整数部18桁・小数部12桁まで。保存値は正確に扱い不要な末尾0を正規化する。",
+        "pattern": "^(0|[1-9][0-9]{0,17})(\\.[0-9]{1,12})?$",
+        "maxLength": 31,
+        "examples": [
+          "0",
+          "123",
+          "0.125",
+          "1000000.50"
+        ]
+      },
+      "PositiveDecimal": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          {
+            "not": {
+              "pattern": "^0(\\.0+)?$"
+            }
+          }
+        ],
+        "description": "正の10進文字列。未設定を表す場合は値0ではなく月エントリを省略/削除する。",
+        "examples": [
+          "1",
+          "0.01",
+          "1500000"
+        ]
+      },
+      "MonthKey": {
+        "type": "string",
+        "description": "defaultまたはYYYY-MM。年0000は不可、月01〜12。",
+        "pattern": "^(default|(?!0000)[0-9]{4}-(0[1-9]|1[0-2]))$",
+        "examples": [
+          "default",
+          "2026-09"
+        ]
+      },
+      "MarketUnitWrite": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "asset_id",
+          "name",
+          "asset_class",
+          "currency",
+          "units",
+          "source_symbol",
+          "audit_match_key",
+          "csv_url"
+        ],
+        "properties": {
+          "asset_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "既存IDを維持する。新規行だけnull。非nullの未知IDは422。"
+          },
+          "name": {
+            "$ref": "#/components/schemas/NonBlankText"
+          },
+          "asset_class": {
+            "$ref": "#/components/schemas/NonBlankText",
+            "description": "trim後にuppercase。候補一覧は閉じたenumではない。分類を入力できることは価格評価対応済みを意味しない。"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/NonBlankText",
+            "description": "trim後にuppercase。既存UIは自由文字列。JPY/USD等の候補に限定せず、評価可能性は価格設定と別途検証する。"
+          },
+          "units": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "source_symbol": {
+            "$ref": "#/components/schemas/Text",
+            "description": "空文字ならnameを採用する既存正規化契約を維持。"
+          },
+          "audit_match_key": {
+            "$ref": "#/components/schemas/Text",
+            "description": "編集可能な互換識別子。空でなければasset_keyに採用。不変asset_idとは別。"
+          },
+          "csv_url": {
+            "$ref": "#/components/schemas/Text",
+            "description": "空を許可する価格ソース設定。URL・provider selectorの既存許可形式を共通入力検証で判定。任意URLの即時fetchは行わない。"
+          }
+        }
+      },
+      "MarketUnit": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "asset_id",
+          "name",
+          "asset_class",
+          "currency",
+          "units",
+          "source_symbol",
+          "audit_match_key",
+          "csv_url",
+          "asset_key"
+        ],
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "$ref": "#/components/schemas/NonBlankText"
+          },
+          "asset_class": {
+            "$ref": "#/components/schemas/NonBlankText",
+            "description": "trim後にuppercase。候補一覧は閉じたenumではない。分類を入力できることは価格評価対応済みを意味しない。"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/NonBlankText",
+            "description": "trim後にuppercase。既存UIは自由文字列。JPY/USD等の候補に限定せず、評価可能性は価格設定と別途検証する。"
+          },
+          "units": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "source_symbol": {
+            "$ref": "#/components/schemas/Text",
+            "description": "空文字ならnameを採用する既存正規化契約を維持。"
+          },
+          "audit_match_key": {
+            "$ref": "#/components/schemas/Text",
+            "description": "編集可能な互換識別子。空でなければasset_keyに採用。不変asset_idとは別。"
+          },
+          "csv_url": {
+            "$ref": "#/components/schemas/Text",
+            "description": "空を許可する価格ソース設定。URL・provider selectorの既存許可形式を共通入力検証で判定。任意URLの即時fetchは行わない。"
+          },
+          "asset_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "description": "既存normalize_market_unit_rowが算出する互換識別子。APIの不変asset_idとは別。"
+          }
+        }
+      },
+      "ExternalAssetWrite": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entry_id",
+          "category",
+          "amount",
+          "name"
+        ],
+        "properties": {
+          "entry_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "既存IDを維持する。新規行だけnull。非nullの未知IDは422。"
+          },
+          "category": {
+            "$ref": "#/components/schemas/NonBlankText"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "name": {
+            "$ref": "#/components/schemas/Text",
+            "description": "表示名。既存domainの名称欠落時category表示を維持するため空文字も許可。UIは従来の名前入力を案内可能だが、APIと異なる必須検証は持たない。"
+          }
+        }
+      },
+      "ExternalAsset": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entry_id",
+          "category",
+          "amount",
+          "name"
+        ],
+        "properties": {
+          "entry_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "category": {
+            "$ref": "#/components/schemas/NonBlankText"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "name": {
+            "$ref": "#/components/schemas/Text",
+            "description": "表示名。既存domainの名称欠落時category表示を維持するため空文字も許可。UIは従来の名前入力を案内可能だが、APIと異なる必須検証は持たない。"
+          }
+        }
+      },
+      "BasisEntryWrite": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entry_id",
+          "total_acquisition_cost_jpy"
+        ],
+        "properties": {
+          "entry_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "既存IDを維持する。新規行だけnull。非nullの未知IDは422。"
+          },
+          "total_acquisition_cost_jpy": {
+            "$ref": "#/components/schemas/PositiveDecimal"
+          }
+        }
+      },
+      "BasisEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entry_id",
+          "total_acquisition_cost_jpy"
+        ],
+        "properties": {
+          "entry_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "total_acquisition_cost_jpy": {
+            "$ref": "#/components/schemas/PositiveDecimal"
+          }
+        }
+      },
+      "ExternalMonthWrite": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 5000,
+            "items": {
+              "$ref": "#/components/schemas/ExternalAssetWrite"
+            }
+          }
+        }
+      },
+      "ExternalMonth": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 5000,
+            "items": {
+              "$ref": "#/components/schemas/ExternalAsset"
+            }
+          }
+        }
+      },
+      "ExternalMonthsWrite": {
+        "type": "object",
+        "maxProperties": 1200,
+        "propertyNames": {
+          "$ref": "#/components/schemas/MonthKey"
+        },
+        "additionalProperties": {
+          "$ref": "#/components/schemas/ExternalMonthWrite"
+        }
+      },
+      "ExternalMonths": {
+        "type": "object",
+        "maxProperties": 1200,
+        "propertyNames": {
+          "$ref": "#/components/schemas/MonthKey"
+        },
+        "additionalProperties": {
+          "$ref": "#/components/schemas/ExternalMonth"
+        }
+      },
+      "BasisMonthsWrite": {
+        "type": "object",
+        "maxProperties": 1200,
+        "propertyNames": {
+          "$ref": "#/components/schemas/MonthKey"
+        },
+        "additionalProperties": {
+          "$ref": "#/components/schemas/BasisEntryWrite"
+        }
+      },
+      "BasisMonths": {
+        "type": "object",
+        "maxProperties": 1200,
+        "propertyNames": {
+          "$ref": "#/components/schemas/MonthKey"
+        },
+        "additionalProperties": {
+          "$ref": "#/components/schemas/BasisEntry"
+        }
+      },
+      "MarketUnitsDocument": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "revision",
+          "storage_state",
+          "updated_at",
+          "items"
+        ],
+        "properties": {
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "storage_state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "uninitialized"
+            ]
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "当該revisionの保存時刻。未初期化だけnull。GET時刻ではない。"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 5000,
+            "items": {
+              "$ref": "#/components/schemas/MarketUnit"
+            }
+          }
+        }
+      },
+      "ExternalAssetsDocument": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "revision",
+          "storage_state",
+          "updated_at",
+          "months"
+        ],
+        "properties": {
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "storage_state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "uninitialized"
+            ]
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "当該revisionの保存時刻。未初期化だけnull。GET時刻ではない。"
+          },
+          "months": {
+            "$ref": "#/components/schemas/ExternalMonths"
+          }
+        }
+      },
+      "PortfolioBasisDocument": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "revision",
+          "storage_state",
+          "updated_at",
+          "months"
+        ],
+        "properties": {
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "storage_state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "uninitialized"
+            ]
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "当該revisionの保存時刻。未初期化だけnull。GET時刻ではない。"
+          },
+          "months": {
+            "$ref": "#/components/schemas/BasisMonths"
+          }
+        }
+      },
+      "ReplaceMarketUnits": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "clear_all"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 5000,
+            "items": {
+              "$ref": "#/components/schemas/MarketUnitWrite"
+            }
+          },
+          "clear_all": {
+            "type": "boolean",
+            "description": "空の全置換はtrue必須。非空の入力ではfalse必須。空→空の再保存にも同じ規則。"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "items": {
+                  "maxItems": 0
+                }
+              },
+              "required": [
+                "items"
+              ]
+            },
+            "then": {
+              "properties": {
+                "clear_all": {
+                  "const": true
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "clear_all": {
+                  "const": false
+                }
+              }
+            }
+          }
+        ]
+      },
+      "ReplaceExternalAssets": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "months",
+          "clear_all"
+        ],
+        "properties": {
+          "months": {
+            "$ref": "#/components/schemas/ExternalMonthsWrite"
+          },
+          "clear_all": {
+            "type": "boolean",
+            "description": "全月の項目総数が0ならtrue、それ以外はfalse。空月keyの有無にかかわらずclear権限を要求し、空月による権限迂回を防ぐ。"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "months": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "items": {
+                        "maxItems": 0
+                      }
+                    },
+                    "required": [
+                      "items"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "months"
+              ]
+            },
+            "then": {
+              "properties": {
+                "clear_all": {
+                  "const": true
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "clear_all": {
+                  "const": false
+                }
+              }
+            }
+          }
+        ]
+      },
+      "ReplacePortfolioBasis": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "months",
+          "clear_all"
+        ],
+        "properties": {
+          "months": {
+            "$ref": "#/components/schemas/BasisMonthsWrite"
+          },
+          "clear_all": {
+            "type": "boolean",
+            "description": "空の全置換はtrue必須。非空の入力ではfalse必須。空→空の再保存にも同じ規則。"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "months": {
+                  "maxProperties": 0
+                }
+              },
+              "required": [
+                "months"
+              ]
+            },
+            "then": {
+              "properties": {
+                "clear_all": {
+                  "const": true
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "clear_all": {
+                  "const": false
+                }
+              }
+            }
+          }
+        ]
+      },
+      "MarketUnitsReplacementResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "changed",
+          "change_id",
+          "resource"
+        ],
+        "properties": {
+          "changed": {
+            "type": "boolean",
+            "description": "正規化後の内容または保存管理状態が変化した場合true。同一内容ならfalse。"
+          },
+          "change_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "資産変更の履歴ID。changed=falseならnull。再送では初回IDを再利用。"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/MarketUnitsDocument"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "changed": {
+                  "const": false
+                }
+              },
+              "required": [
+                "changed"
+              ]
+            },
+            "then": {
+              "properties": {
+                "change_id": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "change_id": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "ExternalAssetsReplacementResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "changed",
+          "change_id",
+          "resource"
+        ],
+        "properties": {
+          "changed": {
+            "type": "boolean",
+            "description": "正規化後の内容または保存管理状態が変化した場合true。同一内容ならfalse。"
+          },
+          "change_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "資産変更の履歴ID。changed=falseならnull。再送では初回IDを再利用。"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ExternalAssetsDocument"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "changed": {
+                  "const": false
+                }
+              },
+              "required": [
+                "changed"
+              ]
+            },
+            "then": {
+              "properties": {
+                "change_id": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "change_id": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "PortfolioBasisReplacementResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "changed",
+          "change_id",
+          "resource"
+        ],
+        "properties": {
+          "changed": {
+            "type": "boolean",
+            "description": "正規化後の内容または保存管理状態が変化した場合true。同一内容ならfalse。"
+          },
+          "change_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "資産変更の履歴ID。changed=falseならnull。再送では初回IDを再利用。"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/PortfolioBasisDocument"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "changed": {
+                  "const": false
+                }
+              },
+              "required": [
+                "changed"
+              ]
+            },
+            "then": {
+              "properties": {
+                "change_id": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "change_id": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "InputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "suggested_asset_classes",
+          "suggested_external_categories",
+          "month_order",
+          "new_month_default",
+          "external_category_default",
+          "decimal_integer_digits",
+          "decimal_fraction_digits",
+          "max_market_units",
+          "max_external_entries",
+          "max_month_keys",
+          "max_request_bytes"
+        ],
+        "properties": {
+          "contract_version": {
+            "type": "string",
+            "const": "0.1.0"
+          },
+          "suggested_asset_classes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NonBlankText"
+            },
+            "uniqueItems": true
+          },
+          "suggested_external_categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NonBlankText"
+            },
+            "uniqueItems": true
+          },
+          "month_order": {
+            "type": "string",
+            "const": "descending_default_last"
+          },
+          "new_month_default": {
+            "type": "string",
+            "const": "latest_existing_non_default_or_default"
+          },
+          "external_category_default": {
+            "type": "string",
+            "const": "CASH_EXTERNAL"
+          },
+          "decimal_integer_digits": {
+            "type": "integer",
+            "const": 18
+          },
+          "decimal_fraction_digits": {
+            "type": "integer",
+            "const": 12
+          },
+          "max_market_units": {
+            "type": "integer",
+            "const": 5000
+          },
+          "max_external_entries": {
+            "type": "integer",
+            "const": 5000
+          },
+          "max_month_keys": {
+            "type": "integer",
+            "const": 1200
+          },
+          "max_request_bytes": {
+            "type": "integer",
+            "const": 2097152
+          }
+        },
+        "description": "公開された静的入力定義。既存データ由来の候補は含めず、clientが権限のあるGET結果と候補を結合する。各月itemsの上限に加え、全月の外部資産総数は5000以下というbusiness ruleを適用。",
+        "examples": [
+          {
+            "contract_version": "0.1.0",
+            "suggested_asset_classes": [
+              "MUTUAL_FUNDS",
+              "JP_STOCK",
+              "US_STOCK",
+              "FX",
+              "COMMODITIES"
+            ],
+            "suggested_external_categories": [
+              "CASH_EXTERNAL"
+            ],
+            "month_order": "descending_default_last",
+            "new_month_default": "latest_existing_non_default_or_default",
+            "external_category_default": "CASH_EXTERNAL",
+            "decimal_integer_digits": 18,
+            "decimal_fraction_digits": 12,
+            "max_market_units": 5000,
+            "max_external_entries": 5000,
+            "max_month_keys": 1200,
+            "max_request_bytes": 2097152
+          }
+        ]
+      },
+      "Health": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "api_version",
+          "contract_version"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "unavailable"
+            ]
+          },
+          "api_version": {
+            "type": "string",
+            "const": "v1"
+          },
+          "contract_version": {
+            "type": "string",
+            "const": "0.1.0"
+          }
+        }
+      },
+      "FieldError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "pointer",
+          "code",
+          "message"
+        ],
+        "properties": {
+          "pointer": {
+            "type": "string",
+            "pattern": "^(|(/([^~/]|~[01])*)+)$",
+            "description": "RFC6901 JSON Pointer。headerの場合は空文字。"
+          },
+          "code": {
+            "$ref": "#/components/schemas/NonBlankText"
+          },
+          "message": {
+            "$ref": "#/components/schemas/Text"
+          }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail",
+          "instance",
+          "code"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri-reference",
+            "description": "about:blankを使用。機械判定はcodeで行う。",
+            "const": "about:blank"
+          },
+          "title": {
+            "$ref": "#/components/schemas/NonBlankText"
+          },
+          "status": {
+            "type": "integer",
+            "minimum": 400,
+            "maximum": 599,
+            "description": "実際のHTTP statusと一致。"
+          },
+          "detail": {
+            "$ref": "#/components/schemas/Text"
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri-reference",
+            "description": "urn:uuid:形式のrequest識別子。"
+          },
+          "code": {
+            "$ref": "#/components/schemas/NonBlankText"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldError"
+            }
+          }
+        }
+      }
+    }
+  },
+  "x-ui-coverage": [
+    {
+      "id": "UI-COM-01",
+      "operationIds": [
+        "getMarketUnits",
+        "getExternalAssets",
+        "getPortfolioBasis"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:154"
+    },
+    {
+      "id": "UI-COM-02",
+      "operationIds": [],
+      "source": "../../src/web/market_units_editor/src/App.tsx:551"
+    },
+    {
+      "id": "UI-COM-03",
+      "operationIds": [
+        "getMarketUnits",
+        "getExternalAssets",
+        "getPortfolioBasis"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:154"
+    },
+    {
+      "id": "UI-COM-04",
+      "operationIds": [],
+      "source": "../../src/web/market_units_editor/src/App.tsx:839"
+    },
+    {
+      "id": "UI-COM-05",
+      "operationIds": [
+        "getMarketUnits",
+        "getExternalAssets",
+        "getPortfolioBasis"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:507"
+    },
+    {
+      "id": "UI-COM-06",
+      "operationIds": [
+        "getMarketUnits",
+        "getExternalAssets",
+        "getPortfolioBasis",
+        "getInputSchema"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:68"
+    },
+    {
+      "id": "UI-COM-07",
+      "operationIds": [
+        "replaceMarketUnits",
+        "replaceExternalAssets",
+        "replacePortfolioBasis"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:608"
+    },
+    {
+      "id": "UI-COM-08",
+      "operationIds": [
+        "getMarketUnits",
+        "getExternalAssets",
+        "getPortfolioBasis",
+        "replaceMarketUnits",
+        "replaceExternalAssets",
+        "replacePortfolioBasis"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:254"
+    },
+    {
+      "id": "UI-MU-01",
+      "operationIds": [
+        "getMarketUnits"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:154"
+    },
+    {
+      "id": "UI-MU-02",
+      "operationIds": [
+        "replaceMarketUnits"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:217"
+    },
+    {
+      "id": "UI-MU-03",
+      "operationIds": [
+        "replaceMarketUnits"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:229"
+    },
+    {
+      "id": "UI-MU-04",
+      "operationIds": [
+        "replaceMarketUnits"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:249"
+    },
+    {
+      "id": "UI-MU-05",
+      "operationIds": [
+        "replaceMarketUnits"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:254"
+    },
+    {
+      "id": "UI-MU-06",
+      "operationIds": [
+        "replaceMarketUnits"
+      ],
+      "source": "../../src/web/market_units_editor/server.ts:140"
+    },
+    {
+      "id": "UI-MU-07",
+      "operationIds": [
+        "getMarketUnits",
+        "getInputSchema"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:697"
+    },
+    {
+      "id": "UI-EA-01",
+      "operationIds": [
+        "getExternalAssets"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:106"
+    },
+    {
+      "id": "UI-EA-02",
+      "operationIds": [
+        "replaceExternalAssets",
+        "getInputSchema"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:275"
+    },
+    {
+      "id": "UI-EA-03",
+      "operationIds": [
+        "replaceExternalAssets"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:329"
+    },
+    {
+      "id": "UI-EA-04",
+      "operationIds": [
+        "replaceExternalAssets"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:331"
+    },
+    {
+      "id": "UI-EA-05",
+      "operationIds": [
+        "replaceExternalAssets"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:365"
+    },
+    {
+      "id": "UI-EA-06",
+      "operationIds": [
+        "replaceExternalAssets"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:391"
+    },
+    {
+      "id": "UI-EA-07",
+      "operationIds": [
+        "replaceExternalAssets"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:365"
+    },
+    {
+      "id": "UI-EA-08",
+      "operationIds": [
+        "getExternalAssets",
+        "replaceExternalAssets"
+      ],
+      "source": "../../src/web/market_units_editor/server.ts:84"
+    },
+    {
+      "id": "UI-EA-09",
+      "operationIds": [
+        "getExternalAssets",
+        "getInputSchema"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:918"
+    },
+    {
+      "id": "UI-PB-01",
+      "operationIds": [
+        "getPortfolioBasis"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:124"
+    },
+    {
+      "id": "UI-PB-02",
+      "operationIds": [
+        "replacePortfolioBasis",
+        "getInputSchema"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:412"
+    },
+    {
+      "id": "UI-PB-03",
+      "operationIds": [
+        "replacePortfolioBasis"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:435"
+    },
+    {
+      "id": "UI-PB-04",
+      "operationIds": [
+        "replacePortfolioBasis"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:454"
+    },
+    {
+      "id": "UI-PB-05",
+      "operationIds": [
+        "replacePortfolioBasis"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:474"
+    },
+    {
+      "id": "UI-PB-06",
+      "operationIds": [
+        "replacePortfolioBasis"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:486"
+    },
+    {
+      "id": "UI-PB-07",
+      "operationIds": [
+        "replacePortfolioBasis"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:474"
+    },
+    {
+      "id": "UI-PB-08",
+      "operationIds": [
+        "getPortfolioBasis",
+        "getInputSchema"
+      ],
+      "source": "../../src/web/market_units_editor/src/App.tsx:1035"
+    }
+  ],
+  "x-business-rules": [
+    "文字列はtrim・指定項目のuppercase後にも各schemaの長さ・非空・制御文字制約を再検証する。正規化で上限を超える場合は422 normalized_value_invalid。切捨てない。",
+    "Market Unitsのasset_id、External Assets/Portfolio Basisそれぞれのentry_idは、対象resource全体で一意。入力に指定した非null IDは対象resourceに存在すること。nullは新規行だけ。",
+    "Market Unitsの互換asset_keyは正規化後に一意。audit_match_keyまたはasset_class:currency:source_symbolから生成する。source_symbol空欄時はname。",
+    "External Assetsの総項目数は全月で5000以下。空月keyは保持するが、総項目数0ならclear_all=trueとexternal-assets:clearが必要。",
+    "Text/NonBlankTextはC0/C1制御文字を禁止する。csv_urlは現在の価格ソース表記を保存する文字列で、PUT時に取得・実行しない。既存provider表記とURL許可範囲の照合はPhase B実装前に現行取得経路へbindする。",
+    "新規未初期化の空入力はstorage_state=uninitialized。登録済み入力の欠落・不正は503。未初期化の初回保存は空内容でもreadyへの遷移を変更として記録する。",
+    "schemaとbusiness ruleの両方を満たさなければ422。GETで既存非適合入力を黙って正規化・修正せず503とし、移行時に個別解消する。"
+  ]
+}

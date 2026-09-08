@@ -12,6 +12,7 @@ import yfinance as yf
 
 from src.config.settings import DIR_COLLECTION_HISTORY, MARKET_UNITS_CSV
 from src.lib.logger import setup_logger
+from src.infra.market_units_input_repository import locked_market_units_csv
 
 logger = setup_logger(__name__)
 
@@ -71,8 +72,8 @@ class CollectionHistoryUpdater:
             return str(value or default).strip()
 
         try:
-            with open(self.funds_csv_path, newline="", encoding="utf-8") as f:
-                for row in csv.DictReader(f):
+            with locked_market_units_csv(self.funds_csv_path) as raw:
+                for row in csv.DictReader(io.StringIO(raw.decode("utf-8"))):
                     try:
                         name = _clean(row.get("name"))
                         asset_class = _clean(row.get("asset_class"), "MUTUAL_FUNDS") or "MUTUAL_FUNDS"

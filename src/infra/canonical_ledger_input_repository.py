@@ -6,6 +6,7 @@
 """
 
 import csv
+import io
 import json
 import os
 from typing import Any, Dict, List, Optional, Set
@@ -17,6 +18,7 @@ from src.infra.market_units_snapshot_repository import (
     load_units_snapshot,
     snapshot_path,
 )
+from src.infra.market_units_input_repository import locked_market_units_csv
 from src.lib.atomic_write import atomic_write_json
 
 
@@ -48,8 +50,8 @@ class CanonicalLedgerInputRepository:
         return load_units_snapshot(path, target_date, ssot_a_path)
 
     def read_market_units_columns(self, csv_path: str) -> Set[str]:
-        with open(csv_path, newline="", encoding="utf-8") as handle:
-            reader = csv.DictReader(handle)
+        with locked_market_units_csv(csv_path) as raw_csv:
+            reader = csv.DictReader(io.StringIO(raw_csv.decode("utf-8-sig"), newline=""))
             return set(reader.fieldnames or [])
 
     def read_market_units(self, csv_path: str) -> List[Dict[str, Any]]:

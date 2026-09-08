@@ -1,10 +1,9 @@
 import express from "express";
-import csv from "csv-parser";
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { createServer as createViteServer } from "vite";
-
-type FundRow = Record<string, string>;
+import { InputApiGateway } from "./inputApiGateway";
 
 interface ExternalAssetItem {
   category: string;
@@ -27,37 +26,15 @@ type PortfolioBasisMap = Record<string, PortfolioBasisRecord>;
 const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || "127.0.0.1";
 const APP_ROOT = process.cwd();
-const CSV_PATH = path.resolve(APP_ROOT, "../../../data/collection/market_units.csv");
-const EXTERNAL_ASSETS_PATH = path.resolve(APP_ROOT, "../../../data/external_assets.json");
-const PORTFOLIO_BASIS_PATH = path.resolve(APP_ROOT, "../../../data/portfolio_basis.json");
+const REPOSITORY_ROOT = path.resolve(APP_ROOT, "../../..");
+const DATA_ROOT = process.env.CAPTION_DATA_DIR ? path.resolve(process.env.CAPTION_DATA_DIR) : path.join(REPOSITORY_ROOT, "data");
+const CSV_PATH = path.join(DATA_ROOT, "collection/market_units.csv");
+const EXTERNAL_ASSETS_PATH = path.join(DATA_ROOT, "external_assets.json");
+const PORTFOLIO_BASIS_PATH = path.join(DATA_ROOT, "portfolio_basis.json");
 const DIST_PATH = path.join(APP_ROOT, "dist");
-const FUND_HEADERS = [
-  "name",
-  "asset_class",
-  "currency",
-  "units",
-  "source_symbol",
-  "audit_match_key",
-  "csv_url"
-] as const;
 
 function ensureParentDir(filePath: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-}
-
-function escapeCsvValue(value: string): string {
-  if (/[",\n\r]/.test(value)) {
-    return `"${value.replace(/"/g, "\"\"")}"`;
-  }
-  return value;
-}
-
-function normalizeFundRow(input: FundRow): FundRow {
-  const row: FundRow = {};
-  for (const header of FUND_HEADERS) {
-    row[header] = String(input[header] ?? "").trim();
-  }
-  return row;
 }
 
 function sortMonthKeys(a: string, b: string): number {
@@ -122,41 +99,32 @@ function normalizePortfolioBasis(input: unknown): PortfolioBasisMap {
 
 async function startServer(): Promise<void> {
   const app = express();
+  app.disable("etag"); // A normalized PUT must not acquire Express' automatic validator.
+  app.set("trust proxy", "loopback");
+  const gateway = new InputApiGateway(REPOSITORY_ROOT, CSV_PATH);
+  const forward: express.RequestHandler = async (req, res) => {
+    // Mounted middleware strips the prefix from req.path; the worker needs canonical paths.
+    gateway.send(res, await gateway.call(req, { path: req.originalUrl.split("?", 1)[0] }));
+  };
+  for (const prefix of ["/api/v1", "/api/session", "/api/funds", "/api/health"]) {
+    app.use(prefix, express.raw({ type: () => true, limit: "2mb" }), forward);
+  }
   app.use(express.json({ limit: "1mb" }));
-
-  app.get("/api/funds", (_req, res) => {
-    if (!fs.existsSync(CSV_PATH)) {
-      return res.json([]);
-    }
-
-    const rows: FundRow[] = [];
-    fs.createReadStream(CSV_PATH)
-      .pipe(csv())
-      .on("data", (row: FundRow) => rows.push(normalizeFundRow(row)))
-      .on("end", () => res.json(rows))
-      .on("error", (error: Error) => res.status(500).json({ error: error.message }));
-  });
-
-  app.post("/api/funds", (req, res) => {
-    if (!Array.isArray(req.body)) {
-      return res.status(400).json({ error: "Data must be an array." });
-    }
-
-    ensureParentDir(CSV_PATH);
-    const rows = req.body.map((row) => normalizeFundRow(row as FundRow));
-    const csvContent = [
-      FUND_HEADERS.join(","),
-      ...rows.map((row) => FUND_HEADERS.map((header) => escapeCsvValue(row[header])).join(","))
-    ].join("\n");
-
-    try {
-      fs.writeFileSync(CSV_PATH, `${csvContent}\n`, "utf-8");
-      return res.json({ success: true, path: CSV_PATH, count: rows.length });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      return res.status(500).json({ error: message });
-    }
-  });
+  for (const resource of ["external-assets", "portfolio-basis"]) {
+    app.use(`/api/${resource}`, async (req, res, next) => {
+      const permissions = [`${resource}:read`];
+      if (req.method !== "GET") {
+        permissions.push(`${resource}:replace`);
+        const empty = resource === "external-assets"
+          ? Object.values(normalizeExternalAssets(req.body)).every((record) => record.items.length === 0)
+          : Object.keys(normalizePortfolioBasis(req.body)).length === 0;
+        if (empty) permissions.push(`${resource}:clear`);
+      }
+      const result = await gateway.call(req, { kind: "authorize", permissions });
+      if (result.status !== 204) gateway.send(res, result);
+      else { res.setHeader("Cache-Control", "no-store"); next(); }
+    });
+  }
 
   app.get("/api/external-assets", (_req, res) => {
     if (!fs.existsSync(EXTERNAL_ASSETS_PATH)) {
@@ -230,12 +198,12 @@ async function startServer(): Promise<void> {
     }
   });
 
-  app.get("/api/health", (_req, res) => {
-    res.json({
-      ok: true,
-      csvPath: CSV_PATH,
-      externalAssetsPath: EXTERNAL_ASSETS_PATH,
-      portfolioBasisPath: PORTFOLIO_BASIS_PATH
+  app.use((error: { status?: number }, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    const status = error.status === 413 ? 413 : 400;
+    res.status(status).type("application/problem+json").set("Cache-Control", "no-store").json({
+      type: "about:blank", title: status === 413 ? "Content Too Large" : "Bad Request", status,
+      code: status === 413 ? "payload_too_large" : "invalid_request", instance: `urn:uuid:${randomUUID()}`,
+      detail: status === 413 ? "入力サイズの上限を超えています。" : "正しいJSONを送信してください。",
     });
   });
 
@@ -250,12 +218,15 @@ async function startServer(): Promise<void> {
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, HOST, () => {
+  const server = app.listen(PORT, HOST, () => {
     console.log(`THE CAPTION: http://localhost:${PORT}`);
     console.log(`Market Units CSV Path: ${CSV_PATH}`);
     console.log(`External Assets Path: ${EXTERNAL_ASSETS_PATH}`);
     console.log(`Portfolio Basis Path: ${PORTFOLIO_BASIS_PATH}`);
   });
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    process.once(signal, () => { gateway.close(); server.close(() => process.exit(0)); });
+  }
 }
 
 void startServer();
