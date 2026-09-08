@@ -164,7 +164,8 @@ PY
   local node_dir
   node_dir="$(dirname "${resolved_node_bin}")"
 
-  PATH="${node_dir}:${PATH}" PORT="${PORT:-${app_port}}" VITE_HMR_PORT="${VITE_HMR_PORT:-${hmr_port}}" exec "${node_bin}" "${npm_cli}" --prefix "${web_dir}" run dev -- "$@"
+  # Cookies are shared across ports, so each startup profile needs its own name.
+  CAPTION_API_SESSION_NAMESPACE="${CAPTION_API_SESSION_NAMESPACE:-${profile}}" PATH="${node_dir}:${PATH}" PORT="${PORT:-${app_port}}" VITE_HMR_PORT="${VITE_HMR_PORT:-${hmr_port}}" exec "${node_bin}" "${npm_cli}" --prefix "${web_dir}" run dev -- "$@"
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

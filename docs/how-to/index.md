@@ -3,6 +3,8 @@
 > ルートの `AGENTS.md` が制御契約の正本です。  
 > 契約の読み方・運用上の更新履歴は [開発用プロンプト説明書](./agents-prompt-guide.md) に集約します。
 
+資産入力WebUI/APIの認証・起動・保存手順は [Market Units API](./market-units-api.md) を参照してください。
+
 ## 1. Daily Operations (日常運用)
 
 ### 1.1 Execution Commands (CLI実行)

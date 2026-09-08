@@ -28,6 +28,12 @@
 - Prompt / LLM output changes: read [Prompt Design](./prompts.md) and the Prompt Injection Guard section in [System Reference](./system.md#23-prompt-injection-guard-プロンプトインジェクション防御).
 - Legacy changes: read legacy sections explicitly; do not apply legacy assumptions to v4 daily.
 
+## API Contract and Migration
+
+- [THE CAPTION API v1 契約と WebUI 操作対応](./api-v1.md)（段階B：Market Units実装、残り2リソース移行予定）
+- [OpenAPI v1](./openapi-v1.json)（契約版 0.1.0）
+- [Market Units API の起動と利用](../how-to/market-units-api.md)
+
 ## Related
 
 - [Docs Index](../_index.md)

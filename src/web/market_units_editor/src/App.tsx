@@ -1,14 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-
-interface Fund {
-  name: string;
-  asset_class: string;
-  currency: string;
-  units: string;
-  source_symbol: string;
-  audit_match_key: string;
-  csv_url: string;
-}
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { EMPTY_FUND, formatUnits, MarketUnitsStore } from "./marketUnitsClient";
 
 interface ExternalAssetItem {
   category: string;
@@ -43,16 +34,6 @@ interface PortfolioBasisFormData {
 type ActiveApp = "funds" | "external" | "basis";
 type NoticeTone = "success" | "error" | "info";
 
-const EMPTY_FUND: Fund = {
-  name: "",
-  asset_class: "",
-  currency: "",
-  units: "",
-  source_symbol: "",
-  audit_match_key: "",
-  csv_url: ""
-};
-
 const EMPTY_ASSET: ExternalAssetFormData = {
   month: "",
   category: "CASH_EXTERNAL",
@@ -82,21 +63,37 @@ export default function App() {
   const [activeApp, setActiveApp] = useState<ActiveApp>("funds");
   const [notice, setNotice] = useState<{ tone: NoticeTone; text: string } | null>(null);
 
-  const [funds, setFunds] = useState<Fund[]>([]);
-  const [loadingFunds, setLoadingFunds] = useState(true);
-  const [savingFunds, setSavingFunds] = useState(false);
+  const [fundStore] = useState(() => new MarketUnitsStore());
+  const fundState = useSyncExternalStore(fundStore.subscribe, fundStore.getSnapshot);
+  const funds = fundState.items;
+  const loadingFunds = fundState.loading;
+  const savingFunds = fundState.saving;
   const [fundsView, setFundsView] = useState<"list" | "form">("list");
-  const [editingFundIndex, setEditingFundIndex] = useState<number | null>(null);
-  const [fundFormData, setFundFormData] = useState<Fund>(EMPTY_FUND);
+  const fundFormData = fundState.form?.item ?? EMPTY_FUND;
+  const editingFundId = fundState.form?.targetId ?? null;
+  const [sessionToken, setSessionToken] = useState("");
+  const fundsLocked = loadingFunds || savingFunds || !!fundState.pending || fundState.needsRefresh || !fundState.etag;
+  const canReplaceFunds = !!fundState.session?.permissions.includes("market-units:replace");
+  const formIsStale = !!fundState.form && fundState.form.epoch !== fundState.epoch;
 
-  const [externalAssets, setExternalAssets] = useState<ExternalAssetsMap>({});
+  const externalAssetsInitialized = useRef(false);
+  const [externalAssets, setExternalAssetsValue] = useState<ExternalAssetsMap>({});
+  const setExternalAssets = (value: React.SetStateAction<ExternalAssetsMap>) => {
+    externalAssetsInitialized.current = true;
+    setExternalAssetsValue(value);
+  };
   const [loadingExternalAssets, setLoadingExternalAssets] = useState(true);
   const [savingExternalAssets, setSavingExternalAssets] = useState(false);
   const [externalView, setExternalView] = useState<"list" | "form">("list");
   const [editingExternalId, setEditingExternalId] = useState<string | null>(null);
   const [externalFormData, setExternalFormData] = useState<ExternalAssetFormData>(EMPTY_ASSET);
 
-  const [portfolioBasis, setPortfolioBasis] = useState<PortfolioBasisMap>({});
+  const portfolioBasisInitialized = useRef(false);
+  const [portfolioBasis, setPortfolioBasisValue] = useState<PortfolioBasisMap>({});
+  const setPortfolioBasis = (value: React.SetStateAction<PortfolioBasisMap>) => {
+    portfolioBasisInitialized.current = true;
+    setPortfolioBasisValue(value);
+  };
   const [loadingPortfolioBasis, setLoadingPortfolioBasis] = useState(true);
   const [savingPortfolioBasis, setSavingPortfolioBasis] = useState(false);
   const [basisView, setBasisView] = useState<"list" | "form">("list");
@@ -152,22 +149,8 @@ export default function App() {
   );
 
   const fetchFunds = async () => {
-    setLoadingFunds(true);
-    try {
-      const res = await fetch("/api/funds");
-      if (!res.ok) {
-        const payload = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(payload.error || "Failed to fetch funds.");
-      }
-      const data = (await res.json()) as Fund[];
-      setFunds(data.map((fund) => ({ ...EMPTY_FUND, ...fund })));
-      setNotice(null);
-    } catch (err) {
-      console.error("Failed to fetch funds:", err);
-      setNotice({ tone: "error", text: err instanceof Error ? err.message : "Failed to fetch funds." });
-    } finally {
-      setLoadingFunds(false);
-    }
+    if (fundState.dirty && !window.confirm("Refresh will replace the list draft with the latest saved data. Copy any changes you want to keep first. Continue?")) return;
+    await fundStore.refresh();
   };
 
   const fetchExternalAssets = async () => {
@@ -175,8 +158,9 @@ export default function App() {
     try {
       const res = await fetch("/api/external-assets");
       if (!res.ok) {
-        const payload = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(payload.error || "Failed to fetch external assets." );
+        const payload = (await res.json().catch(() => ({}))) as { error?: string; detail?: string; code?: string };
+        if (res.status === 401 || (res.status === 403 && payload.code === "csrf_invalid")) fundStore.requireSignIn();
+        throw new Error(payload.detail || payload.error || "Failed to fetch external assets." );
       }
       const data = (await res.json()) as ExternalAssetsMap;
       setExternalAssets(data);
@@ -194,8 +178,9 @@ export default function App() {
     try {
       const res = await fetch("/api/portfolio-basis");
       if (!res.ok) {
-        const payload = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(payload.error || "Failed to fetch portfolio basis.");
+        const payload = (await res.json().catch(() => ({}))) as { error?: string; detail?: string; code?: string };
+        if (res.status === 401 || (res.status === 403 && payload.code === "csrf_invalid")) fundStore.requireSignIn();
+        throw new Error(payload.detail || payload.error || "Failed to fetch portfolio basis.");
       }
       const data = (await res.json()) as PortfolioBasisMap;
       setPortfolioBasis(data);
@@ -209,66 +194,51 @@ export default function App() {
   };
 
   useEffect(() => {
-    void fetchFunds();
-    void fetchExternalAssets();
-    void fetchPortfolioBasis();
-  }, []);
+    void fundStore.initialize();
+  }, [fundStore]);
+
+  useEffect(() => {
+    if (!fundState.session) return;
+    // Reauthentication changes credentials, not the user's current draft.
+    // A successful load or a local edit initializes each legacy resource.
+    if (!externalAssetsInitialized.current) void fetchExternalAssets();
+    if (!portfolioBasisInitialized.current) void fetchPortfolioBasis();
+  }, [fundState.session]);
 
   const handleOpenFundForm = (index: number | null = null) => {
-    if (index !== null) {
-      setFundFormData(funds[index]);
-      setEditingFundIndex(index);
-    } else {
-      setFundFormData(EMPTY_FUND);
-      setEditingFundIndex(null);
-    }
-    setNotice(null);
-    setFundsView("form");
+    fundStore.openForm(index === null ? undefined : funds[index]?.draft_id);
+    if (fundStore.getSnapshot().form) setFundsView("form");
   };
 
-  const handleSaveFundForm = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!fundFormData.name.trim() || !fundFormData.units.trim()) {
-      setNotice({ tone: "error", text: "Name and Units are required." });
-      return;
-    }
-
-    if (editingFundIndex !== null) {
-      const nextFunds = [...funds];
-      nextFunds[editingFundIndex] = fundFormData;
-      setFunds(nextFunds);
-      setNotice({ tone: "success", text: "Fund entry updated locally." });
-    } else {
-      setFunds([...funds, fundFormData]);
-      setNotice({ tone: "success", text: "Fund entry added locally." });
-    }
-
-    setFundsView("list");
+  const handleSaveFundForm = (event: React.FormEvent) => {
+    event.preventDefault();
+    fundStore.applyForm();
+    if (!fundStore.getSnapshot().form) setFundsView("list");
   };
 
   const handleDeleteFund = (index: number) => {
-    setFunds(funds.filter((_, currentIndex) => currentIndex !== index));
-    setNotice({ tone: "info", text: "Fund entry removed locally." });
+    if (funds[index]) fundStore.deleteItem(funds[index].draft_id);
   };
 
   const handleSaveFundsToCsv = async () => {
-    setSavingFunds(true);
+    const clearConfirmed = funds.length === 0 && window.confirm("Clear all Market Units on the server? This saves an empty asset list and requires clear permission.");
+    if (funds.length === 0 && !clearConfirmed) return;
+    await fundStore.save(clearConfirmed);
+  };
+
+  const handleLogin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const credential = sessionToken;
+    setSessionToken("");
+    await fundStore.login(credential);
+  };
+
+  const handleCopyDraft = async () => {
     try {
-      const res = await fetch("/api/funds", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(funds)
-      });
-      if (!res.ok) {
-        const payload = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(payload.error || "Failed to save funds.");
-      }
-      setNotice({ tone: "success", text: "Saved to data/collection/market_units.csv." });
-    } catch (err) {
-      console.error("Error saving funds:", err);
-      setNotice({ tone: "error", text: err instanceof Error ? err.message : "Error saving funds." });
-    } finally {
-      setSavingFunds(false);
+      await navigator.clipboard.writeText(JSON.stringify(funds.map(({ draft_id: _draftId, ...item }) => item), null, 2));
+      setNotice({ tone: "info", text: "Market Units draft copied. Refresh and reapply the changes you want to keep." });
+    } catch {
+      setNotice({ tone: "error", text: "Clipboard is unavailable. Copy the draft shown below before refreshing." });
     }
   };
 
@@ -393,12 +363,13 @@ export default function App() {
     try {
       const res = await fetch("/api/external-assets", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": fundState.session?.csrf_token ?? "" },
         body: JSON.stringify(externalAssets)
       });
       if (!res.ok) {
-        const payload = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(payload.error || "Failed to save external assets.");
+        const payload = (await res.json().catch(() => ({}))) as { error?: string; detail?: string; code?: string };
+        if (res.status === 401 || (res.status === 403 && payload.code === "csrf_invalid")) fundStore.requireSignIn();
+        throw new Error(payload.detail || payload.error || "Failed to save external assets.");
       }
       setNotice({ tone: "success", text: "Saved to data/external_assets.json." });
     } catch (err) {
@@ -488,12 +459,13 @@ export default function App() {
     try {
       const res = await fetch("/api/portfolio-basis", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": fundState.session?.csrf_token ?? "" },
         body: JSON.stringify(portfolioBasis)
       });
       if (!res.ok) {
-        const payload = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(payload.error || "Failed to save portfolio basis.");
+        const payload = (await res.json().catch(() => ({}))) as { error?: string; detail?: string; code?: string };
+        if (res.status === 401 || (res.status === 403 && payload.code === "csrf_invalid")) fundStore.requireSignIn();
+        throw new Error(payload.detail || payload.error || "Failed to save portfolio basis.");
       }
       setNotice({ tone: "success", text: "Saved to data/portfolio_basis.json." });
     } catch (err) {
@@ -504,10 +476,11 @@ export default function App() {
     }
   };
 
+  const visibleNotice = (activeApp === "funds" || !fundState.session) ? fundState.notice ?? notice : notice;
   const noticeClassName =
-    notice?.tone === "error"
+    visibleNotice?.tone === "error"
       ? "border-red-200 bg-red-50 text-red-700"
-      : notice?.tone === "success"
+      : visibleNotice?.tone === "success"
         ? "border-emerald-200 bg-emerald-50 text-emerald-700"
         : "border-[#cbd5e1] bg-white text-[#64748b]";
 
@@ -525,7 +498,19 @@ export default function App() {
         ? "SYNCING"
         : savingFunds
           ? "SAVING"
-          : "READY"
+          : !fundState.session
+            ? "SIGN IN"
+            : fundState.pending
+              ? "RESULT UNCONFIRMED"
+              : fundState.needsRefresh
+                ? "SAVED / REFRESH NEEDED"
+                : fundState.conflict
+                  ? "CONFLICT"
+                  : !fundState.etag
+                    ? "REFRESH NEEDED"
+                  : fundState.dirty
+                    ? "DRAFT"
+                    : "READY"
       : activeApp === "external"
         ? loadingExternalAssets
           ? "SYNCING"
@@ -595,39 +580,68 @@ export default function App() {
       </header>
 
       <main className="flex-1 flex flex-col relative pb-28">
-        {notice && (
+        {visibleNotice && (
           <section className="px-4 md:px-12 pt-6">
             <div className="max-w-7xl mx-auto">
               <div className={`border px-5 py-4 text-[12px] tracking-[0.12em] uppercase ${noticeClassName}`}>
-                {notice.text}
+                {visibleNotice.text}
               </div>
             </div>
           </section>
         )}
 
+        {!fundState.session && fundState.sessionChecked && (
+          <section className="px-4 md:px-12 py-8 border-b border-[#cbd5e1]">
+            <form onSubmit={handleLogin} className="max-w-xl mx-auto space-y-4">
+              <label htmlFor="session-token" className="block text-sm">Sign in with your THE CAPTION access token</label>
+              <input id="session-token" type="password" autoComplete="off" value={sessionToken}
+                onChange={(event) => setSessionToken(event.target.value)} disabled={fundState.authenticating}
+                className="w-full border-b border-[#cbd5e1] py-2 focus:outline-none focus:border-[#c5a059]" required />
+              <button type="submit" disabled={fundState.authenticating || !sessionToken.trim()}
+                className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] disabled:opacity-30">
+                [ {fundState.authenticating ? "Signing In" : "Sign In"} ]
+              </button>
+            </form>
+          </section>
+        )}
+
+        <fieldset disabled={!fundState.session} className="contents">
         <div className="border-b border-[#cbd5e1] px-4 md:px-12 py-4 sticky top-[73px] z-10 bg-white/80 backdrop-blur-sm">
           <div className="max-w-7xl mx-auto flex flex-wrap gap-6 md:gap-10">
             {activeApp === "funds" ? (
               <>
                 <button
                   onClick={() => handleOpenFundForm()}
+                  disabled={fundsLocked || !canReplaceFunds}
                   className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer"
                 >
                   [ Add New ]
                 </button>
                 <button
                   onClick={() => void fetchFunds()}
+                  disabled={loadingFunds || savingFunds || !!fundState.pending || !fundState.session}
                   className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer"
                 >
                   [ Refresh ]
                 </button>
                 <button
                   onClick={() => void handleSaveFundsToCsv()}
-                  disabled={savingFunds}
+                  disabled={fundsLocked || !canReplaceFunds || fundState.conflict || (funds.length === 0 && !fundState.session?.permissions.includes("market-units:clear"))}
                   className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer disabled:opacity-30"
                 >
                   [ {savingFunds ? "Saving" : "Save to Server"} ]
                 </button>
+                {fundState.pending && (
+                  <button onClick={() => void fundStore.retry()} disabled={savingFunds || !fundState.session}
+                    className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] disabled:opacity-30">
+                    [ Retry Same Request ]
+                  </button>
+                )}
+                {fundState.conflict && (
+                  <button onClick={() => void handleCopyDraft()} className="text-[11px] uppercase tracking-[0.15em] text-[#64748b]">
+                    [ Copy Draft ]
+                  </button>
+                )}
               </>
             ) : activeApp === "external" ? (
               <>
@@ -682,6 +696,12 @@ export default function App() {
             {activeApp === "funds" ? (
               fundsView === "list" ? (
                 <div className="space-y-12">
+                  {fundState.conflict && (
+                    <details className="text-sm">
+                      <summary>Preserved draft — copy before refreshing</summary>
+                      <pre className="mt-4 overflow-auto whitespace-pre-wrap">{JSON.stringify(funds.map(({ draft_id: _draftId, ...item }) => item), null, 2)}</pre>
+                    </details>
+                  )}
                   <div className="overflow-x-auto -mx-4 px-4 md:mx-0 md:px-0">
                     {loadingFunds ? (
                       <div className="py-24 text-center text-[11px] uppercase tracking-[0.2em] text-[#64748b]">
@@ -704,17 +724,14 @@ export default function App() {
                         </thead>
                         <tbody className="divide-y divide-[#cbd5e1]/30">
                           {funds.map((row, idx) => (
-                            <tr key={`${row.name}-${idx}`} className="hover:bg-[#f8fafc] transition-colors group">
+                            <tr key={row.draft_id} className="hover:bg-[#f8fafc] transition-colors group">
                               <td className="py-6 text-[13px] tracking-[0.05em] font-light text-[#1e293b]">
                                 <div className="truncate-guard" title={row.name}>{row.name}</div>
                               </td>
                               <td className="py-6 text-[13px] text-[#64748b] uppercase tracking-[0.1em] font-light pl-4">{row.asset_class}</td>
                               <td className="py-6 text-[13px] text-[#64748b] uppercase tracking-[0.1em] font-light">{row.currency}</td>
                               <td className="py-6 text-[13px] text-right tabular-nums tracking-[-0.02em] font-extralight text-[#1e293b] pr-10">
-                                {Number(row.units || 0).toLocaleString(undefined, {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 8
-                                })}
+                                {formatUnits(row.units)}
                               </td>
                               <td className="py-6 text-[13px] text-[#64748b] uppercase tracking-[0.1em] font-light">{row.source_symbol}</td>
                               {hasAuditKey && (
@@ -725,12 +742,14 @@ export default function App() {
                               <td className="py-6 text-right space-x-6">
                                 <button
                                   onClick={() => handleOpenFundForm(idx)}
+                                  disabled={fundsLocked || !canReplaceFunds}
                                   className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer font-light"
                                 >
                                   [ Edit ]
                                 </button>
                                 <button
                                   onClick={() => handleDeleteFund(idx)}
+                                  disabled={fundsLocked || !canReplaceFunds}
                                   className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer font-light"
                                 >
                                   [ Delete ]
@@ -754,53 +773,57 @@ export default function App() {
                 <div className="max-w-xl mx-auto border border-[#cbd5e1] p-8 md:p-16 bg-white">
                   <header className="mb-12 border-b border-[#cbd5e1] pb-6">
                     <h3 className="text-[11px] uppercase tracking-[0.15em] text-[#c5a059]">
-                      {editingFundIndex !== null ? "Edit Fund" : "New Fund"}
+                      {editingFundId !== null ? "Edit Fund" : "New Fund"}
                     </h3>
                   </header>
+                  {formIsStale && (
+                    <p role="alert" className="mb-6 text-sm text-amber-800">
+                      This form belongs to an older version. Keep a copy of your edits, cancel it, and reopen the current entry before applying changes.
+                    </p>
+                  )}
                   <form onSubmit={handleSaveFundForm} className="space-y-10">
+                    <fieldset disabled={fundsLocked || !canReplaceFunds} className="contents">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
                       <div className="space-y-3">
                         <label className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] block">Name</label>
                         <input
                           className="w-full border-b border-[#cbd5e1] py-2 text-[15px] focus:outline-none focus:border-[#c5a059] transition-colors bg-transparent"
                           value={fundFormData.name}
-                          onChange={(e) => setFundFormData({ ...fundFormData, name: e.target.value })}
+                          onChange={(e) => fundStore.updateForm({ name: e.target.value })}
                           required
                         />
                       </div>
                       <div className="space-y-3">
                         <label className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] block">Units</label>
                         <input
-                          type="number"
-                          step="any"
+                          type="text"
+                          inputMode="decimal"
+                          pattern="(0|[1-9][0-9]{0,17})(\.[0-9]{1,12})?"
                           className="w-full border-b border-[#cbd5e1] py-2 text-[15px] focus:outline-none focus:border-[#c5a059] transition-colors bg-transparent tabular-nums"
                           value={fundFormData.units}
-                          onChange={(e) => setFundFormData({ ...fundFormData, units: e.target.value })}
+                          onChange={(e) => fundStore.updateForm({ units: e.target.value })}
                           required
                         />
                       </div>
                       <div className="space-y-3">
                         <label className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] block">Asset Class</label>
-                        <select
-                          className="w-full border-b border-[#cbd5e1] py-2 text-[15px] focus:outline-none focus:border-[#c5a059] transition-colors bg-transparent cursor-pointer"
+                        <input
+                          list="fund-asset-classes"
+                          className="w-full border-b border-[#cbd5e1] py-2 text-[15px] focus:outline-none focus:border-[#c5a059] transition-colors bg-transparent"
                           value={fundFormData.asset_class}
-                          onChange={(e) => setFundFormData({ ...fundFormData, asset_class: e.target.value })}
+                          onChange={(event) => fundStore.updateForm({ asset_class: event.target.value })}
                           required
-                        >
-                          <option value="">Select Asset Class</option>
-                          {fundAssetClasses.map((assetClass) => (
-                            <option key={assetClass} value={assetClass}>
-                              {assetClass}
-                            </option>
-                          ))}
-                        </select>
+                        />
+                        <datalist id="fund-asset-classes">
+                          {fundAssetClasses.map((assetClass) => <option key={assetClass} value={assetClass} />)}
+                        </datalist>
                       </div>
                       <div className="space-y-3">
                         <label className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] block">Currency</label>
                         <input
                           className="w-full border-b border-[#cbd5e1] py-2 text-[15px] focus:outline-none focus:border-[#c5a059] transition-colors bg-transparent"
                           value={fundFormData.currency}
-                          onChange={(e) => setFundFormData({ ...fundFormData, currency: e.target.value })}
+                          onChange={(e) => fundStore.updateForm({ currency: e.target.value })}
                           required
                         />
                       </div>
@@ -809,7 +832,7 @@ export default function App() {
                         <input
                           className="w-full border-b border-[#cbd5e1] py-2 text-[15px] focus:outline-none focus:border-[#c5a059] transition-colors bg-transparent"
                           value={fundFormData.source_symbol}
-                          onChange={(e) => setFundFormData({ ...fundFormData, source_symbol: e.target.value })}
+                          onChange={(e) => fundStore.updateForm({ source_symbol: e.target.value })}
                         />
                       </div>
                       <div className="space-y-3">
@@ -817,7 +840,7 @@ export default function App() {
                         <input
                           className="w-full border-b border-[#cbd5e1] py-2 text-[15px] focus:outline-none focus:border-[#c5a059] transition-colors bg-transparent"
                           value={fundFormData.csv_url}
-                          onChange={(e) => setFundFormData({ ...fundFormData, csv_url: e.target.value })}
+                          onChange={(e) => fundStore.updateForm({ csv_url: e.target.value })}
                         />
                       </div>
                       <div className="space-y-3 md:col-span-2">
@@ -825,25 +848,27 @@ export default function App() {
                         <input
                           className="w-full border-b border-[#cbd5e1] py-2 text-[15px] focus:outline-none focus:border-[#c5a059] transition-colors bg-transparent"
                           value={fundFormData.audit_match_key}
-                          onChange={(e) => setFundFormData({ ...fundFormData, audit_match_key: e.target.value })}
+                          onChange={(e) => fundStore.updateForm({ audit_match_key: e.target.value })}
                         />
                       </div>
                     </div>
                     <div className="pt-12 flex gap-10">
                       <button
                         type="submit"
+                        disabled={formIsStale}
                         className="text-[11px] uppercase tracking-[0.2em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer font-light"
                       >
                         [ Save Entry ]
                       </button>
                       <button
                         type="button"
-                        onClick={() => setFundsView("list")}
+                        onClick={() => { fundStore.cancelForm(); setFundsView("list"); }}
                         className="text-[11px] uppercase tracking-[0.2em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer font-light"
                       >
                         [ Cancel ]
                       </button>
                     </div>
+                    </fieldset>
                   </form>
                 </div>
               )
@@ -1073,6 +1098,7 @@ export default function App() {
             )}
           </div>
         </div>
+        </fieldset>
       </main>
 
       <footer className="fixed bottom-0 w-full border-t border-[#cbd5e1] bg-white/80 backdrop-blur-sm z-50">
