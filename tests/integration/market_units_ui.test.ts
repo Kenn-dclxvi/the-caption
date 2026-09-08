@@ -11,6 +11,28 @@ const ID_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const CSRF = 'session-csrf-token';
 const ETAG = '"revision-one"';
 
+test('default browser transport preserves the fetch receiver during session checks and login', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = async function (this: unknown, input, init) {
+    assert.equal(this, globalThis, 'native browser fetch requires its global receiver');
+    calls.push(`${init?.method ?? 'GET'} ${input}`);
+    if (calls.length === 1) return json({ code: 'authentication_required' }, 401);
+    if (String(input) === '/api/session') return session();
+    return json(resource(), 200, { ETag: ETAG });
+  };
+  try {
+    const store = new MarketUnitsStore();
+    await store.initialize();
+    await store.login('test-browser-token');
+    assert.ok(store.getSnapshot().session);
+    assert.equal(store.getSnapshot().etag, ETAG);
+    assert.deepEqual(calls, ['GET /api/session', 'POST /api/session', 'GET /api/v1/market-units']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 function json(body: unknown, status = 200, headers: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {
     status,

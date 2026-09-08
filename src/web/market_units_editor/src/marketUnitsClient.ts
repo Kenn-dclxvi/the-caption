@@ -91,7 +91,10 @@ export class MarketUnitsStore {
   private listeners = new Set<() => void>();
   private initialization: Promise<void> | null = null;
 
-  constructor(private fetcher: typeof fetch = fetch, private uuid: () => string = () => crypto.randomUUID()) {}
+  constructor(
+    private fetcher: typeof fetch = (...args) => globalThis.fetch(...args),
+    private uuid: () => string = () => crypto.randomUUID()
+  ) {}
 
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => {
