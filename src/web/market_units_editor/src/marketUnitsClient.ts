@@ -77,7 +77,7 @@ export function formatUnits(value: string): string {
   return whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",") + (fraction === undefined ? "" : `.${fraction}`);
 }
 
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(readonly status: number, readonly code: string, detail: string, readonly retryAt = 0) {
     super(detail);
   }
@@ -114,7 +114,7 @@ export class MarketUnitsStore {
       !this.state.loading && !this.state.saving && !this.state.pending && !this.state.needsRefresh;
   }
 
-  private async request(path: string, init: RequestInit = {}, retrySession = true): Promise<Response> {
+  async request(path: string, init: RequestInit = {}, retrySession = true): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30000);
     try {

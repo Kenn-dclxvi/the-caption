@@ -1,14 +1,14 @@
 # THE CAPTION API v1 契約と WebUI 操作対応
 
-**Status: Partially implemented（段階B：Market Units）**
+**Status: Implemented（段階B：3画面のAPI・WebUI。実データ導入は未実施）**
 
 契約版: `0.1.0` / 作成日: 2026-09-08
 
 ## 1. 目的
 
-[ADR-0008](../adr/ADR-0008-caption-api-and-private-importer.md) の段階Aとして、3画面の全操作を API の入力・出力・権限・保存効果・失敗条件へ対応付ける。以下の契約全体が実装済みという意味ではない。
+[ADR-0008](../adr/ADR-0008-caption-api-and-private-importer.md) の段階Aとして、3画面の全操作を API の入力・出力・権限・保存効果・失敗条件へ対応付ける。APIの実装状況と、実データ導入・運用状況は区別する。
 
-2026-09-08の実装範囲は `getMarketUnits / replaceMarketUnits / getInputSchema / getHealth` とMarket Units WebUIの移行。External Assets / Portfolio Basisのv1は未実装で、WebUIは認証・CSRF付きの旧GET/POSTを使う。この2リソースの安定ID・競合・再送・journal移行を終えるまで段階B全体は未完了。[起動・認証・運用手順](../how-to/market-units-api.md)を参照する。
+2026-09-08の実装範囲は、3リソースのGET/PUT、input-schema、healthの全8操作と3画面のWebUI移行。External Assets / Portfolio Basisにも安定ID・競合検出・再送記録・journal復旧を実装し、日次readerも同じロックと復旧処理を使う。汎用取込・private連携・実データ導入は別段階である。[起動・認証・運用手順](../how-to/market-units-api.md)を参照する。
 
 機械可読契約の正本は [OpenAPI 3.1.1](./openapi-v1.json)。本書は、JSON Schema だけでは表現しきれない状態遷移と操作対応を定める。OpenAPI の `x-common-rules` / `x-business-rules` / `x-ui-coverage` もこの契約の一部である。二つの文書が食い違う場合は実装前に修正し、都合のよい一方を採用しない。
 
@@ -200,11 +200,15 @@ PUT成功後は返却されたIDと保存結果を保持し、GETで最新docume
 
 旧POSTの無条件書込みを互換性の名目で残さない。移行するWebUIはGETで版を取得し、旧adapterを残す場合も条件情報を渡す。情報を渡せない旧clientは428として更新を案内し、サーバーが最新revisionを勝手に補って上書きしない。
 
-現在はMarket Unitsの旧GETだけが共通serviceへ委譲し、旧POSTは428で拒否する。External Assets / Portfolio Basisは旧payloadと保存方式を維持し、認証・CSRF・clear権限だけを共通側で検証する。この暫定経路を新API契約準拠とは数えない。
+現在は旧GET3本も共通serviceへ委譲し、IDとrevisionを省いた互換形状を返す。旧POST3本は認証・書込み権限・sessionのCSRFを確認したうえで428 `client_upgrade_required` を返す。旧clientによる無条件上書きは行わない。金額・数量は旧GETでも正確な10進文字列として返す。
 
 ## 12. 実装時の受入条件
 
-以下は段階B全体の完了条件である。2026-09-08の修正後全Pythonテストは1,049件成功・5件スキップ、TypeScript検査・production build・UI protocol 13件が成功した。Pythonテストには転送時の本文膨張も検証する実HTTP 12件、API service 63件、入力domain 140件、保存repository 23件が含まれる。資格情報CLIの作成・一覧・失効は一時ディレクトリで確認した。EA/PBの再認証時の下書き保持・CSRF回復も修正したが、その画面effect自体のブラウザ実行テストは未実施。これはMarket Unitsのローカル検証結果であり、未実装の2リソース、実データ移行、Monex接続、定期運用の完了を意味しない。
+以下は段階B全体の完了条件である。
+
+Market Units導入時の検証記録（今回の全体件数ではない）：2026-09-08の修正後全Pythonテストは1,049件成功・5件スキップ、TypeScript検査・production build・UI protocol 13件が成功した。Pythonテストには転送時の本文膨張も検証する実HTTP 12件、API service 63件、入力domain 140件、保存repository 23件が含まれる。資格情報CLIの作成・一覧・失効は一時ディレクトリで確認した。EA/PBの再認証時の下書き保持・CSRF回復も修正したが、その画面effect自体のブラウザ実行テストは未実施。これはMarket Units導入時のローカル検証記録であり、その時点では残り2リソースが未実装だった。
+
+External Assets / Portfolio Basis移行では、実HTTP経由の保存・再起動後再送、月移動とID維持、数値精度、全消去権限、競合、登録済みファイルの欠落・手編集検出、journal各段階の停止からの日次読取り復旧を追加検証した。UI通信テストは2画面の下書き・再認証・結果不明・保存後GET失敗を含む。実ブラウザでは一時データでログイン不要の初期表示、月移動・既存月置換・保存後再読込み・未適用フォームの保護を確認した。実アーカイブを置かない分離worktreeではアーカイブ依存の8テストがスキップされる。実データ導入、Monex接続、定期運用は未実施。
 
 | 検証ID | 条件 |
 | :--- | :--- |
@@ -223,7 +227,7 @@ PUT成功後は返却されたIDと保存結果を保持し、GETで最新docume
 
 ## 13. 段階Bの方式と残作業
 
-Market Unitsは既存ExpressをHTTP入口とし、private stdio接続のPython application serviceで認証・保存する。既存CSVに隣接する管理情報で安定ID、revision、履歴、再送結果を保持し、プロセス間lockと永続journalで停止から復旧する。日次readerも同じlockを使用する。token/sessionと価格URLの扱いは第5・7節およびhow-toに定めた。External Assets / Portfolio Basisのv1実装と旧経路の移行は残作業である。
+Market Unitsは既存ExpressをHTTP入口とし、private stdio接続のPython application serviceで認証・保存する。既存CSVに隣接する管理情報で安定ID、revision、履歴、再送結果を保持し、プロセス間lockと永続journalで停止から復旧する。日次readerも同じlockを使用する。token/sessionと価格URLの扱いは第5・7節およびhow-toに定めた。External Assets / Portfolio BasisはJSONに隣接する `.monthly_inputs_api/<JSONファイル名>/` にID・revision・履歴・再送結果を保持し、JSONと管理情報をjournalで復旧する。既存JSONの初回GETは元ファイルを書き換えず管理情報だけを登録する。保存時も金額は10進文字列を維持し、既存の日次domainが評価用数値へ変換する。外部資産の旧flat `items` 形式はdefault入力へ対応付け、空月は保持する。残作業は実データ導入と段階Cの汎用取込APIである。
 
 文字数・数値桁・件数・body上限は提案値であり、既存データへの事前適合検査を受入条件とする。合わない入力を切捨てたり、今回実口座データを調べて補ったりはしない。定期実行の成立条件はADR-0008の段階Eで扱う。
 

@@ -20,6 +20,7 @@ from src.domain.input_api_auth import (
     principal_for_session, principal_for_token,
 )
 from src.domain.market_units_input import MarketUnitsInputError, validate_replacement
+from src.domain.monthly_inputs import entries, is_clear, legacy_document, validate_replacement as validate_monthly_replacement
 from src.infra.market_units_input_repository import MarketUnitsStoreError
 
 
@@ -75,11 +76,12 @@ def strict_json(raw: str):
 class InputApi:
     def __init__(self, repository, credential_file, *, allowed_price_hosts=None,
                  clock: Callable[[], float] = time.time, requests_per_minute: int = 240, personal_origins=None,
-                 session_namespace: str = ""):
+                 session_namespace: str = "", monthly_repositories=None):
         if not isinstance(session_namespace, str) or not re.fullmatch(r"[A-Za-z0-9_-]{0,64}", session_namespace):
             raise ValueError("session_namespace must contain at most 64 ASCII letters, digits, underscores or hyphens")
         self.session_cookie_name = "caption_session" + (f"_{session_namespace}" if session_namespace else "")
         self.repository = repository
+        self.monthly_repositories = dict(monthly_repositories or {})
         self.credential_file = credential_file
         self.allowed_price_hosts = set(allowed_price_hosts or ())
         self.clock = clock
@@ -206,19 +208,23 @@ class InputApi:
                 "max_external_entries": 5000, "max_month_keys": 1200,
                 "max_request_bytes": MAX_BODY_BYTES,
             })
-        if path not in {"/api/v1/market-units", "/api/funds"}:
+        aliases = {"/api/funds": "market-units", "/api/external-assets": "external-assets",
+                   "/api/portfolio-basis": "portfolio-basis"}
+        resource = aliases.get(path, path.removeprefix("/api/v1/"))
+        repository = self.repository if resource == "market-units" else self.monthly_repositories.get(resource)
+        if repository is None or path not in {*aliases, *(f"/api/v1/{name}" for name in ("market-units", "external-assets", "portfolio-basis"))}:
             raise ApiError(404, "not_found", "このAPI操作はまだ提供されていません。")
-        self._require(principal, {"market-units:read"})
+        self._require(principal, {f"{resource}:read"})
         if method == "GET":
-            with self.repository.transaction() as session:
+            with repository.transaction() as session:
                 body = deepcopy(session.state["document"])
-                etag = self.repository.etag(session.state)
-            if path == "/api/funds":
-                body = [{k: v for k, v in row.items() if k not in {"asset_id", "asset_key"}}
-                        for row in body["items"]]
+                etag = repository.etag(session.state)
+            if path in aliases:
+                body = ([{k: v for k, v in row.items() if k not in {"asset_id", "asset_key"}} for row in body["items"]]
+                        if resource == "market-units" else legacy_document(body["months"], resource))
             return response(200, body, {"ETag": etag})
-        self._require(principal, {"market-units:replace"})
-        if path == "/api/funds":
+        self._require(principal, {f"{resource}:replace"})
+        if path in aliases:
             raise ApiError(428, "client_upgrade_required", "保存にはAPI v1と読込み時のETagを使用してください。")
         if method != "PUT":
             raise ApiError(405, "method_not_allowed", "GETまたはPUTを使用してください。")
@@ -236,8 +242,8 @@ class InputApi:
         except (ValueError, AttributeError):
             raise ApiError(400, "invalid_request", "Idempotency-KeyにはUUIDを指定してください。")
         payload = strict_json(raw)
-        if isinstance(payload, dict) and (payload.get("clear_all") is True or payload.get("items") == []):
-            self._require(principal, {"market-units:clear"})
+        if self._clears(payload, resource):
+            self._require(principal, {f"{resource}:clear"})
         fingerprint = hashlib.sha256(json.dumps(
             {"body": payload, "if_match": if_match}, ensure_ascii=False, sort_keys=True,
             separators=(",", ":"), allow_nan=False,
@@ -250,21 +256,27 @@ class InputApi:
                 raise ApiError(409, "idempotency_in_progress", "同じ保存要求を処理しています。")
             self._active.add(receipt_id)
         try:
-            return self._replace(principal, headers, payload, if_match, fingerprint, receipt_id)
+            return self._replace(principal, headers, payload, if_match, fingerprint, receipt_id, repository, resource)
         finally:
             with self._guard:
                 self._active.discard(receipt_id)
 
-    def _replace(self, principal, headers, payload, if_match, fingerprint, receipt_id):
-        with self.repository.transaction() as session:
+    @staticmethod
+    def _clears(payload, resource):
+        if resource != "market-units":
+            return is_clear(payload, resource)
+        return isinstance(payload, dict) and (payload.get("clear_all") is True or payload.get("items") == [])
+
+    def _replace(self, principal, headers, payload, if_match, fingerprint, receipt_id, repository, resource):
+        with repository.transaction() as session:
             state = session.state
             # A request may have waited for another process while grants were revoked.
             current = self._authenticate(headers, write=True)
             if current.subject != principal.subject:
                 raise ApiError(401, "authentication_required", "認証主体が変更されました。再認証してください。")
-            self._require(current, {"market-units:read", "market-units:replace"})
-            if isinstance(payload, dict) and (payload.get("clear_all") is True or payload.get("items") == []):
-                self._require(current, {"market-units:clear"})
+            self._require(current, {f"{resource}:read", f"{resource}:replace"})
+            if self._clears(payload, resource):
+                self._require(current, {f"{resource}:clear"})
             receipt = state["receipts"].get(receipt_id)
             if receipt:
                 if receipt["fingerprint"] != fingerprint:
@@ -276,31 +288,41 @@ class InputApi:
                 result = deepcopy(receipt["result"])
                 result["headers"]["Idempotency-Replayed"] = "true"
                 return result
-            write_csv = False
+            write_input = False
             try:
-                if self.repository.etag(state) != if_match:
+                if repository.etag(state) != if_match:
                     raise ApiError(412, "revision_mismatch", "別の更新がありました。最新の入力と下書きを比較してください。")
                 old = deepcopy(state["document"])
-                items = validate_replacement(
-                    payload, {row["asset_id"] for row in old["items"]},
-                    allowed_price_hosts=self.allowed_price_hosts,
-                    existing_price_urls={row["asset_id"]: row["csv_url"] for row in old["items"]},
-                )
-                for item in items:
-                    if item["asset_id"] is None:
-                        item["asset_id"] = str(uuid.uuid4())
-                changed = items != old["items"] or old["storage_state"] == "uninitialized"
+                if resource == "market-units":
+                    content_key = "items"
+                    items = validate_replacement(
+                        payload, {row["asset_id"] for row in old["items"]},
+                        allowed_price_hosts=self.allowed_price_hosts,
+                        existing_price_urls={row["asset_id"]: row["csv_url"] for row in old["items"]},
+                    )
+                    for item in items:
+                        if item["asset_id"] is None:
+                            item["asset_id"] = str(uuid.uuid4())
+                else:
+                    content_key = "months"
+                    items = validate_monthly_replacement(payload, resource,
+                        {row["entry_id"] for row in entries(old["months"], resource)})
+                    for item in entries(items, resource):
+                        if item["entry_id"] is None:
+                            item["entry_id"] = str(uuid.uuid4())
+                changed = items != old[content_key] or old["storage_state"] == "uninitialized"
                 change_id = str(uuid.uuid4()) if changed else None
                 if changed:
                     state["document"] = {"revision": "rev_" + uuid.uuid4().hex,
                                          "storage_state": "ready",
                                          "updated_at": datetime.fromtimestamp(self.clock(), timezone.utc).isoformat(),
-                                         "items": items}
-                    state["legacy_extras"] = {k: v for k, v in state["legacy_extras"].items()
-                                              if k in {item["asset_id"] for item in items}}
+                                         content_key: items}
+                    if resource == "market-units":
+                        state["legacy_extras"] = {k: v for k, v in state["legacy_extras"].items()
+                                                  if k in {item["asset_id"] for item in items}}
                     state["changes"].append({"change_id": change_id, "subject": principal.subject,
                                               "before": old, "after": deepcopy(state["document"])})
-                    write_csv = True
+                    write_input = True
                 result = response(200, {"changed": changed, "change_id": change_id,
                                         "resource": deepcopy(state["document"])},
                                   {"Idempotency-Replayed": "false"})
@@ -312,7 +334,10 @@ class InputApi:
                 result = problem(exc)
             state["receipts"][receipt_id] = {"fingerprint": fingerprint,
                                              "created_at": self.clock(), "result": deepcopy(result)}
-            session.commit(write_csv=write_csv)
+            if resource == "market-units":
+                session.commit(write_csv=write_input)
+            else:
+                session.commit(write_input=write_input)
             return result
 
     def _session(self, method, headers, secure, local_peer=False):

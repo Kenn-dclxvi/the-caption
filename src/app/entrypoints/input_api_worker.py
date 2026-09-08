@@ -4,12 +4,14 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
+from pathlib import Path
 import sys
 import threading
 
 from src.app.input_api import InputApi, MAX_BODY_BYTES
 from src.infra.input_api_credentials import CredentialFile
 from src.infra.market_units_input_repository import MarketUnitsInputRepository
+from src.infra.monthly_input_repository import MonthlyInputRepository
 
 
 # JSON.stringify can expand each body byte into a six-byte \u00xx escape.
@@ -24,6 +26,8 @@ def main():
     service = InputApi(
         MarketUnitsInputRepository(args.csv_path),
         CredentialFile(os.environ.get("CAPTION_API_CREDENTIALS_FILE")),
+        monthly_repositories={name: MonthlyInputRepository(Path(args.csv_path).parent.parent / (name.replace("-", "_") + ".json"), name)
+                              for name in ("external-assets", "portfolio-basis")},
         session_namespace=os.environ.get("CAPTION_API_SESSION_NAMESPACE", ""),
         personal_origins={origin.strip().rstrip("/") for origin in os.environ.get("CAPTION_PERSONAL_UI_ORIGINS", "").split(",") if origin.strip()},
         allowed_price_hosts={host.strip().lower() for host in os.environ.get("CAPTION_API_PRICE_HOSTS", "").split(",") if host.strip()},

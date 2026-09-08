@@ -4,7 +4,7 @@
   "info": {
     "title": "THE CAPTION 資産入力 API",
     "version": "0.1.0",
-    "description": "段階Bの部分実装。Market Units GET/PUT、input-schema、healthを実装。External Assets/Portfolio Basisは契約案でv1未実装。汎用取込・入力元管理・Monex接続は後続段階。HTTPとデータの共通規則・UI対応はapi-v1.mdを参照。"
+    "description": "段階Bの3リソースGET/PUT、input-schema、healthとWebUIを実装。汎用取込・入力元管理・Monex接続・実データ導入は後続段階。HTTPとデータの共通規則・UI対応はapi-v1.mdを参照。"
   },
   "servers": [
     {
@@ -34,7 +34,7 @@
       "name": "Metadata"
     }
   ],
-  "x-status": "partially-implemented",
+  "x-status": "implemented",
   "x-contract-scope": "ADR-0008 phase A; three UI resources only",
   "x-companion-document": "api-v1.md",
   "x-common-rules": {
@@ -333,7 +333,7 @@
             "$ref": "#/components/responses/ServiceUnavailable"
           }
         },
-        "x-implementation-status": "proposed"
+        "x-implementation-status": "implemented"
       },
       "put": {
         "tags": [
@@ -485,7 +485,7 @@
             "$ref": "#/components/responses/ServiceUnavailable"
           }
         },
-        "x-implementation-status": "proposed"
+        "x-implementation-status": "implemented"
       }
     },
     "/portfolio-basis": {
@@ -548,7 +548,7 @@
             "$ref": "#/components/responses/ServiceUnavailable"
           }
         },
-        "x-implementation-status": "proposed"
+        "x-implementation-status": "implemented"
       },
       "put": {
         "tags": [
@@ -682,7 +682,7 @@
             "$ref": "#/components/responses/ServiceUnavailable"
           }
         },
-        "x-implementation-status": "proposed"
+        "x-implementation-status": "implemented"
       }
     },
     "/input-schema": {
