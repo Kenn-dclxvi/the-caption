@@ -4,6 +4,7 @@ import csv
 from datetime import datetime, timedelta, timezone
 import hashlib
 from http.client import HTTPConnection
+from http.cookiejar import CookieJar
 from http.cookies import SimpleCookie
 import json
 import os
@@ -14,6 +15,8 @@ import socket
 import subprocess
 import time
 from uuid import UUID, uuid4
+from urllib.error import HTTPError
+from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_opener
 
 import pytest
 
@@ -27,7 +30,10 @@ FIELDS = ("name", "asset_class", "currency", "units", "source_symbol", "audit_ma
 
 
 class HttpApi:
-    def __init__(self, directory):
+    def __init__(self, directory, *, session_namespace="", run_script=None, profile=None):
+        self.session_namespace = session_namespace
+        self.run_script = run_script
+        self.profile = profile
         self.data_dir = directory / "data"
         self.csv_path = self.data_dir / "collection/market_units.csv"
         self.csv_path.parent.mkdir(parents=True)
@@ -62,11 +68,19 @@ class HttpApi:
         environment = {**os.environ, "NODE_ENV": "production", "HOST": "127.0.0.1",
             "PORT": str(self.port), "CAPTION_DATA_DIR": str(self.data_dir),
             "CAPTION_API_CREDENTIALS_FILE": str(self.credentials_path),
+            "CAPTION_PERSONAL_UI_ORIGINS": "",
             "CAPTION_API_PYTHON": str(ROOT / ".venv/bin/python"),
             "CAPTION_API_PRICE_HOSTS": "", "PYTHONDONTWRITEBYTECODE": "1"}
+        environment.pop("CAPTION_API_SESSION_NAMESPACE", None)
+        if self.session_namespace is not None:
+            environment["CAPTION_API_SESSION_NAMESPACE"] = self.session_namespace
+        command = [str(WEB_ROOT / "node_modules/.bin/tsx"), "server.ts"]
+        if self.run_script is not None:
+            environment["NODE_BIN"] = shutil.which("node")
+            command = ["bash", str(self.run_script), f"collection-web-{self.profile}"]
         self.log = self.log_path.open("ab")
         self.process = subprocess.Popen(
-            [str(WEB_ROOT / "node_modules/.bin/tsx"), "server.ts"], cwd=WEB_ROOT,
+            command, cwd=WEB_ROOT,
             env=environment, stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True,
         )
         deadline = time.monotonic() + 15
@@ -234,6 +248,73 @@ def test_http_session_cookie_csrf_and_logout(http_api):
     assert logout["status"] == 204 and logout["body"] is None
     assert "Max-Age=0" in logout["headers"]["set-cookie"]
     assert_problem(http_api.request(headers=cookie, token=None), 401, "authentication_required")
+
+
+@pytest.fixture
+def web_run_script(tmp_path):
+    if shutil.which("node") is None or not (WEB_ROOT / "node_modules/.bin/tsx").is_file():
+        pytest.skip("HTTP integration requires Node and the editor's installed npm dependencies")
+    if shutil.which("otool") is None:
+        pytest.skip("run.sh currently requires macOS otool to validate Node")
+    # Preserve the launcher's sibling-checkout layout without using live data or ports.
+    for name in ("THE-CAPTION", "THE-CAPTION-DEV"):
+        checkout = tmp_path / name
+        checkout.mkdir()
+        (checkout / "src").symlink_to(ROOT / "src", target_is_directory=True)
+        (checkout / ".venv").symlink_to(ROOT / ".venv", target_is_directory=True)
+    script = tmp_path / "THE-CAPTION/run.sh"
+    shutil.copy2(ROOT / "run.sh", script)
+    return script
+
+
+@pytest.mark.parametrize("namespace_setting", [None, "", "custom"], ids=["unset", "empty", "explicit"])
+@pytest.mark.parametrize("logout_profile", ["prd", "dev"])
+def test_http_profile_sessions_coexist_in_one_cookie_jar(tmp_path, web_run_script, logout_profile, namespace_setting):
+    # Run the actual launcher, npm, Express, and independent Python workers.
+    namespaces = {profile: f"custom_{profile}" if namespace_setting == "custom" else profile
+                  for profile in ("prd", "dev")}
+    servers = {profile: HttpApi(tmp_path / profile, run_script=web_run_script, profile=profile,
+                               session_namespace=namespaces[profile] if namespace_setting == "custom" else namespace_setting)
+               for profile in ("prd", "dev")}
+    jar = CookieJar()
+    browser = build_opener(ProxyHandler({}), HTTPCookieProcessor(jar))
+
+    def request(profile, method="GET", *, path="/api/session", headers=None):
+        server = servers[profile]
+        req = Request(f"http://127.0.0.1:{server.port}{path}", method=method,
+                      data=b"{}" if method == "POST" else None, headers=headers or {})
+        try:
+            reply = browser.open(req, timeout=5)
+        except HTTPError as error:
+            reply = error
+        with reply:
+            raw = reply.read()
+            return reply.status, json.loads(raw) if raw else None
+
+    try:
+        for server in servers.values():
+            server.start()
+        sessions = {}
+        for profile in ("prd", "dev", "prd", "dev"):
+            status, session = request(profile, "POST", headers={"Authorization": f"Bearer {TOKEN}"})
+            assert status == 200, session
+            sessions[profile] = session["csrf_token"]
+            for active, csrf in sessions.items():
+                status, current = request(active)
+                assert status == 200 and current["csrf_token"] == csrf
+                assert request(active, path=API_PATH)[0] == 200
+        assert {cookie.name for cookie in jar} == {f"caption_session_{namespace}" for namespace in namespaces.values()}
+        assert len(jar) == 2
+        assert request(logout_profile, "DELETE", headers={"X-CSRF-Token": sessions[logout_profile]})[0] == 204
+        assert request(logout_profile)[0] == 401
+        remaining = "dev" if logout_profile == "prd" else "prd"
+        status, current = request(remaining)
+        assert status == 200 and current["csrf_token"] == sessions[remaining]
+        assert request(remaining, path=API_PATH)[0] == 200
+        assert [cookie.name for cookie in jar] == [f"caption_session_{namespaces[remaining]}"]
+    finally:
+        for server in servers.values():
+            server.stop()
 
 
 def test_http_escaped_body_at_limit_preserves_existing_worker_session(http_api):
