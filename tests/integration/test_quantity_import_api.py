@@ -218,7 +218,9 @@ def test_permissions_are_rechecked_after_waiting_for_lock(imp, monkeypatch):
 
 
 def test_other_subject_and_removed_targets_cannot_read_history(imp):
-    batch = imp.preview()
+    payload, key = imp.request(), str(uuid4())
+    batch = imp.call('POST', 'import-batches', payload, key=key)['body']
+    assert imp.call('POST', 'import-batches', payload, key=key)['body'] == batch
     imp.api.records[1]['subject'] = 'other-source'; imp.api.save_credentials()
     assert imp.call('GET', f"import-batches/{batch['id']}")['status'] == 403
     imp.api.records[1]['subject'] = 'fake-source'; imp.api.save_credentials()
@@ -229,6 +231,10 @@ def test_other_subject_and_removed_targets_cannot_read_history(imp):
     assert imp.call('GET', f"import-batches/{batch['id']}")['status'] == 403
     assert imp.call('GET', f"import-batches/{batch['id']}", owner=True)['status'] == 200
     assert imp.call('GET', f"input-sources/{imp.source['id']}/batches")['body']['batches'] == []
+    denied = imp.call('POST', 'import-batches', payload, key=key)
+    assert denied['status'] == 403
+    assert 'diff' not in denied['body']
+    assert imp.call('POST', f"import-batches/{batch['id']}/cancel", {'diff_hash': batch['diff_hash']})['status'] == 403
 
 
 def test_commit_rechecks_freshness_and_receipt_expiry(imp):
@@ -262,3 +268,39 @@ def test_worker_transport_commits_persisted_preview(imp):
     response = json.loads(result.stdout)
     assert response['status'] == 200 and response['body']['status'] == 'committed', response
     assert imp.api.get()['body']['items'][0]['units'] == '123'
+
+
+@pytest.mark.parametrize('owner', [False, True])
+def test_source_setting_change_allows_cancel_but_not_commit(imp, owner):
+    payload, key = imp.request(), str(uuid4())
+    batch = imp.call('POST', 'import-batches', payload, owner=owner, key=key)['body']
+    before = imp.api.csv_path.read_bytes()
+    config = {**imp.config, 'max_age_seconds': 1800}
+    assert imp.call('PUT', 'input-sources/' + imp.source['id'],
+                    {'base_source_revision': imp.source['revision'], 'config': config, 'resume_ids': []}, owner=True)['status'] == 200
+    # Scope is unchanged: replay returns the original result even after it becomes stale.
+    imp.api.now += 1801
+    assert imp.call('POST', 'import-batches', payload, owner=owner, key=key)['body'] == batch
+    assert imp.commit(batch, owner=owner)['status'] == 412
+    action = {'diff_hash': batch['diff_hash']}
+    assert imp.call('POST', f"import-batches/{batch['id']}/cancel", {'diff_hash': 'wrong'}, owner=owner)['status'] == 412
+    cancelled = imp.call('POST', f"import-batches/{batch['id']}/cancel", action, owner=owner)
+    assert cancelled['status'] == 200 and cancelled['body']['status'] == 'cancelled'
+    assert imp.api.csv_path.read_bytes() == before
+    assert imp.api.get()['body'] == imp.initial
+
+
+def test_owner_can_cancel_removed_target_but_cannot_cancel_committed_batch(imp):
+    batch = imp.preview()
+    committed = imp.preview()
+    assert imp.commit(committed)['status'] == 200
+    config = deepcopy(imp.config)
+    config['targets'][0]['asset_id'] = imp.initial['items'][1]['asset_id']
+    assert imp.call('PUT', 'input-sources/' + imp.source['id'],
+        {'base_source_revision': imp.source['revision'], 'config': config, 'resume_ids': []}, owner=True)['status'] == 200
+    before = imp.api.csv_path.read_bytes()
+    for candidate, status in [(batch, 200), (committed, 409)]:
+        result = imp.call('POST', f"import-batches/{candidate['id']}/cancel",
+                          {'diff_hash': candidate['diff_hash']}, owner=True)
+        assert result['status'] == status
+    assert imp.api.csv_path.read_bytes() == before

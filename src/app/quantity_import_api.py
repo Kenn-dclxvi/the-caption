@@ -46,6 +46,16 @@ def check_batch_source(source, batch):
         fail(412, 'source_changed', 'Source configuration changed; preview again')
 
 
+def can_read_batch(principal, source, batch):
+    return ('input-sources:manage' in principal.permissions or
+            {d['asset_id'] for d in batch['diff']} <= {t['asset_id'] for t in source['targets']})
+
+
+def require_batch_access(principal, source, batch):
+    if not can_read_batch(principal, source, batch):
+        fail(403, 'forbidden', 'Historical batch is outside current scope')
+
+
 def handle(api, principal, method, path, headers, raw):
     try:
         return _handle(api, principal, method, path, headers, raw)
@@ -80,7 +90,7 @@ def _handle(api, principal, method, path, headers, raw):
                 ids = {target['asset_id'] for target in source['targets']}
                 if parts[2] == 'batches':
                     visible = [deepcopy(b) for b in batches.values() if b['source_id'] == source['id'] and
-                               ('input-sources:manage' in principal.permissions or {d['asset_id'] for d in b['diff']} <= ids)]
+                               can_read_batch(principal, source, b)]
                     return response(200, {'batches': visible})
                 return response(200, {'base_revision': document['revision'], 'source_revision': source['revision'],
                     'manual_override': source['manual_override'], 'enabled': source['enabled'],
@@ -96,10 +106,9 @@ def _handle(api, principal, method, path, headers, raw):
                 if batch is None:
                     fail(404, 'not_found', 'Batch not found')
                 source = accessible_source(api, principal, state, batch['source_id'], permission)
-                if method != 'GET':
+                if method == 'POST' and len(parts) == 3 and parts[2] == 'commit':
                     check_batch_source(source, batch)
-                elif 'input-sources:manage' not in principal.permissions and not {d['asset_id'] for d in batch['diff']} <= {t['asset_id'] for t in source['targets']}:
-                    fail(403, 'forbidden', 'Historical batch is outside current scope')
+                require_batch_access(principal, source, batch)
             else:
                 if not isinstance(payload, dict):
                     fail(422, 'invalid_input', 'Expected an object')
@@ -112,6 +121,8 @@ def _handle(api, principal, method, path, headers, raw):
                 fail(409, 'idempotency_key_reused', 'Key already used for a different request')
             if api.clock() - receipt['created_at'] >= RECEIPT_SECONDS:
                 fail(409, 'idempotency_result_expired', 'Read the batch history to reconcile the result')
+            if parts[0] == 'import-batches':
+                require_batch_access(principal, source, receipt['body'])
             return response(receipt['status'], deepcopy(receipt['body']), {'Idempotency-Replayed': 'true'})
         if write and len(state['receipts']) >= 10000:
             fail(503, 'import_capacity_reached', 'Import receipt capacity reached; contact the owner')
