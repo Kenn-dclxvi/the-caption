@@ -10,7 +10,7 @@ export function InputSourcesPanel({ store, auth }: { store: InputSourcesStore; a
   const session = useSyncExternalStore(auth.subscribe, auth.getSnapshot).session;
   useEffect(() => { if (session && store.canManage) void store.initialize(); }, [session, store]);
   if (!session) return <p className="p-6">入力元の管理にはサインインが必要です。</p>;
-  if (!store.canManage) return <p className="p-6">入力元を管理する権限がありません。</p>;
+
   const selected = state.sources.find(s => s.id === state.selected);
   const form = state.form;
   const assetName = (id: string) => state.assets.find(a => a.asset_id === id)?.name ?? id;
@@ -20,16 +20,23 @@ export function InputSourcesPanel({ store, auth }: { store: InputSourcesStore; a
   return <section className="max-w-6xl w-full mx-auto p-4 md:p-8 space-y-6">
     <div><h1 className="text-2xl">入力元と取込履歴</h1>
       <p className="text-sm text-slate-600 mt-2">許可した資産の数量だけを自動更新します。取得元の認証情報はこの画面では扱いません。</p></div>
+    {!store.canManage && <p>入力元を管理する権限がありません。必要な権限で再認証してください。</p>}
     {state.notice && <p role="status" className="border border-amber-300 bg-amber-50 p-4">{state.notice}</p>}
     <div className="flex flex-wrap gap-3">
-      <button className={button} onClick={() => void store.refresh()} disabled={state.busy || (!!state.pending && !state.pending.expired)}>最新状態を取得</button>
+      <button className={button} onClick={() => void store.refresh()} disabled={!store.canManage || state.busy || (!!state.pending && !store.needsComparison)}>最新状態を取得</button>
       <button className={button} onClick={() => store.edit()} disabled={!store.canWrite || !!form}>入力元を登録</button>
     </div>
     {state.pending && <section className="border p-4 space-y-3" aria-label="結果の照合">
       <h2>元の要求を保持しています</h2>
+      <p>入力元：{state.pending.sourceName}（{state.pending.sourceId ?? '新規登録'}）</p>
+      <p>操作：{state.pending.action} ／ バッチ：{state.pending.batchId ?? '対象なし'}</p>
+      <button className={button} disabled={state.busy} onClick={() => void store.refreshPermissions()}>現在の権限を再取得</button>
+      <button className={button} disabled={state.busy} onClick={store.reauthenticate}>別の資格情報で再認証</button>
       <details><summary>元の要求を確認・コピー</summary><pre className="whitespace-pre-wrap break-all text-xs">{state.pending.body}</pre></details>
-      {state.pending.expired ? <>
+      {store.needsComparison ? <>
         <details><summary>最新の入力元設定を比較</summary><pre className="whitespace-pre-wrap break-all text-xs">{JSON.stringify(state.sources, null, 2)}</pre></details>
+        <button className={button} disabled={state.busy || (state.pending.kind === 'batch' && !store.has('imports:read'))} onClick={() => void store.compareOriginal()}>元の要求を照合</button>
+        {state.originalResult != null && <pre className="whitespace-pre-wrap break-all text-xs" aria-label="元バッチの照合結果">{JSON.stringify(state.originalResult, null, 2)}</pre>}
         <p>操作が完了しているか入力元と履歴で確認してください。残したい編集は控えてから再開してください。</p>
         <button className={button} disabled={state.busy || !state.comparisonLoaded} onClick={() => {
           if (window.confirm('照合済みとして元の要求と未送信の編集を破棄し、最新状態から再開しますか？')) store.confirmReconciliation();
@@ -37,7 +44,7 @@ export function InputSourcesPanel({ store, auth }: { store: InputSourcesStore; a
       </> : <button className={button} disabled={state.busy} onClick={() => void store.retry()}>同じ要求を再送して確認</button>}
     </section>}
     <label className="block">入力元
-      <select className={input} value={state.selected ?? ''} disabled={state.busy || !!form || (!!state.pending && !state.pending.expired)} onChange={e => void store.select(e.target.value)}>
+      <select className={input} value={state.selected ?? ''} disabled={!store.canManage || state.busy || !!form || (!!state.pending && !store.needsComparison)} onChange={e => void store.select(e.target.value)}>
         {!state.sources.length && <option value="">登録なし</option>}
         {state.sources.map(s => <option key={s.id} value={s.id}>{s.name} — {!s.enabled ? '無効' : s.manual_override.length ? '手入力で休止中' : '有効'}</option>)}
       </select>

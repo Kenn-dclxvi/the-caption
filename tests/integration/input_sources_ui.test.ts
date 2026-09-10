@@ -30,7 +30,7 @@ async function setup(replies: (Response | Error)[], permissions = ['input-source
   await auth.initialize(); ready = true;
   const store = new InputSourcesStore(auth, () => `key-${++counter}`);
   await store.initialize();
-  return { store, calls, remaining: () => queue.length };
+  return { store, auth, calls, remaining: () => queue.length };
 }
 
 test('source save uses captured configuration revision and explicit resume IDs', async () => {
@@ -128,3 +128,86 @@ test('view-only import permissions cannot mutate a batch', async () => {
   await store.actOnBatch(batch.id, 'commit');
   assert.equal(calls.length, 3);
 });
+
+
+test('lost commit followed by permission denial retains request and permits read reconciliation', async () => {
+  const permissions = ['input-sources:manage', 'market-units:read', 'imports:read', 'imports:commit'];
+  const committed = { ...batch, status: 'committed' as const, changed: true };
+  const { store, auth, calls } = await setup([new Error('lost response'),
+    json({ code: 'permission_denied' }, 403), ...loaded(source, committed), json(committed)], permissions);
+  await store.actOnBatch(batch.id, 'commit');
+  const original = store.getSnapshot().pending!;
+  permissions.pop();
+  await store.retry();
+  assert.equal(store.getSnapshot().pending?.denied, true);
+  assert.equal(store.getSnapshot().pending?.key, original.key);
+  assert.equal(store.getSnapshot().pending?.body, original.body);
+  assert.equal(store.has('imports:commit'), false);
+  assert.equal(store.has('imports:read'), true);
+  assert.ok(auth.getSnapshot().session);
+  await store.retry(); await store.actOnBatch(batch.id, 'commit');
+  store.confirmReconciliation();
+  assert.ok(store.getSnapshot().pending);
+  await store.refresh();
+  assert.equal(store.getSnapshot().comparisonLoaded, false);
+  await store.compareOriginal();
+  assert.equal(calls.at(-1)?.path, '/api/v1/import-batches/batch-1');
+  assert.deepEqual(store.getSnapshot().originalResult, committed);
+  assert.equal(store.canWrite, false);
+  store.confirmReconciliation();
+  assert.equal(store.getSnapshot().pending, null);
+  await store.actOnBatch(batch.id, 'commit');
+  assert.equal(calls.filter(c => c.method !== 'GET').length, 2);
+});
+
+test('permission denial offers reauthentication without losing pending request', async () => {
+  const { store, auth, calls } = await setup([new Error('lost'), json({ code: 'permission_denied' }, 403)]);
+  await store.actOnBatch(batch.id, 'cancel'); await store.retry();
+  const pending = store.getSnapshot().pending;
+  store.reauthenticate();
+  assert.equal(auth.getSnapshot().session, null);
+  assert.equal(store.getSnapshot().pending, pending);
+  store.confirmReconciliation(); await store.compareOriginal();
+  assert.equal(calls.length, 5);
+});
+
+test('browsing another source cannot reconcile the original expired batch', async () => {
+  const otherSource = { ...source, id: 'source-2', name: 'Other source' };
+  const otherBatch = { ...batch, id: 'batch-2', source_id: otherSource.id };
+  const { store, calls } = await setup([json({ code: 'idempotency_result_expired' }, 409),
+    json({ sources: [source, otherSource] }), json(assets), json({ batches: [otherBatch] }), json(batch)]);
+  await store.actOnBatch(batch.id, 'commit');
+  await store.select(otherSource.id);
+  assert.equal(store.getSnapshot().selected, otherSource.id);
+  assert.equal(store.getSnapshot().comparisonLoaded, false);
+  store.confirmReconciliation();
+  assert.equal(store.getSnapshot().pending?.sourceId, source.id);
+  assert.equal(store.getSnapshot().pending?.batchId, batch.id);
+  assert.equal(store.getSnapshot().pending?.action, 'commit');
+  await store.compareOriginal();
+  assert.equal(calls.at(-1)?.path, `/api/v1/import-batches/${batch.id}`);
+  assert.equal(store.getSnapshot().comparisonLoaded, true);
+  store.confirmReconciliation();
+  assert.equal(store.getSnapshot().pending, null);
+  assert.equal(calls.filter(c => c.method !== 'GET').length, 1);
+});
+
+for (const [label, reply] of [
+  ['failed GET', new Error('unavailable')],
+  ['missing batch', json({ code: 'not_found' }, 404)],
+  ['different batch', json({ ...batch, id: 'another-batch' })],
+  ['different source', json({ ...batch, source_id: 'another-source' })],
+] as const) {
+  test(`original batch reconciliation rejects ${label}`, async () => {
+    const { store, calls } = await setup([json({ code: 'idempotency_result_expired' }, 409),
+      json({ sources: [source] }), json(assets), json({ batches: [] }), reply]);
+    await store.actOnBatch(batch.id, 'cancel');
+    await store.refresh(); store.confirmReconciliation();
+    assert.ok(store.getSnapshot().pending);
+    await store.compareOriginal(); store.confirmReconciliation();
+    assert.equal(store.getSnapshot().comparisonLoaded, false);
+    assert.equal(store.getSnapshot().originalResult, null);
+    assert.ok(store.getSnapshot().pending);
+    assert.equal(calls.filter(c => c.method !== 'GET').length, 1);
+  });
+}

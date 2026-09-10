@@ -18,17 +18,18 @@ interface Asset { asset_id: string; name: string; asset_class: string; units: st
 interface SourceForm { id: string | null; revision: string | null; config: SourceConfig; resume_ids: string[] }
 interface Pending {
   path: string; method: 'POST' | 'PUT'; body: string; key: string;
-  kind: 'source' | 'batch'; retryAt: number; expired: boolean;
+  kind: 'source' | 'batch'; retryAt: number; expired: boolean; denied: boolean;
+  sourceId: string | null; batchId: string | null; sourceName: string; action: string;
 }
 interface State {
   sources: InputSource[]; assets: Asset[]; batches: ImportBatch[]; selected: string | null;
   form: SourceForm | null; pending: Pending | null; busy: boolean; loaded: boolean;
-  needsRefresh: boolean; comparisonLoaded: boolean; notice: string | null;
+  needsRefresh: boolean; comparisonLoaded: boolean; originalResult: unknown; notice: string | null;
 }
 
 export class InputSourcesStore {
   private state: State = { sources: [], assets: [], batches: [], selected: null, form: null,
-    pending: null, busy: false, loaded: false, needsRefresh: false, comparisonLoaded: false, notice: null };
+    pending: null, busy: false, loaded: false, needsRefresh: false, comparisonLoaded: false, originalResult: null, notice: null };
   private listeners = new Set<() => void>();
   constructor(private auth: MarketUnitsStore, private uuid = () => crypto.randomUUID()) {}
   getSnapshot = () => this.state;
@@ -37,6 +38,28 @@ export class InputSourcesStore {
   has(permission: string) { return !!this.auth.getSnapshot().session?.permissions.includes(permission); }
   get canManage() { return this.has('input-sources:manage'); }
   get canWrite() { return this.canManage && !this.state.busy && !this.state.pending && !this.state.needsRefresh && this.state.loaded; }
+  get needsComparison() { return !!(this.state.pending?.expired || this.state.pending?.denied); }
+  reauthenticate = () => { if (!this.state.busy) this.auth.requireSignIn(); };
+  refreshPermissions = async () => {
+    if (this.state.busy) return;
+    this.update({ busy: true });
+    try { await this.auth.refreshSession(); this.update({ notice: '現在の権限を取得しました。元の要求を照合してから再開してください。' }); }
+    catch (error) { this.update({ notice: this.error(error) }); }
+    finally { this.update({ busy: false }); }
+  };
+  compareOriginal = async () => {
+    const pending = this.state.pending;
+    if (!pending || !this.needsComparison || this.state.busy || !this.auth.getSnapshot().session) return;
+    if (pending.kind !== 'batch') { await this.refresh(); return; }
+    if (!this.has('imports:read')) return;
+    this.update({ busy: true, comparisonLoaded: false, originalResult: null });
+    try {
+      const result = await (await this.auth.request(`/api/v1/import-batches/${pending.batchId}`)).json() as ImportBatch;
+      if (result.id !== pending.batchId || result.source_id !== pending.sourceId) throw new Error('元のバッチと一致しないため照合できません。');
+      this.update({ comparisonLoaded: true, originalResult: result, notice: '元のバッチを取得しました。反映状態を確認してから照合を確定してください。' });
+    } catch (error) { this.update({ notice: this.error(error) }); }
+    finally { this.update({ busy: false }); }
+  };
   private error(error: unknown) {
     if (error instanceof ApiError && (error.status === 401 || error.code === 'csrf_invalid')) this.auth.requireSignIn();
     return error instanceof Error ? error.message : '操作に失敗しました。';
@@ -48,22 +71,23 @@ export class InputSourcesStore {
     const id = sources.some(s => s.id === selected) ? selected : sources[0]?.id ?? null;
     const batches = id ? (await (await this.auth.request(`/api/v1/input-sources/${id}/batches`)).json()).batches as ImportBatch[] : [];
     this.update({ sources, assets, batches, selected: id, loaded: true, needsRefresh: false,
-      comparisonLoaded: !!this.state.pending?.expired });
+      comparisonLoaded: this.needsComparison && this.state.pending?.kind === 'source' &&
+        (!this.state.pending.sourceId || sources.some(s => s.id === this.state.pending!.sourceId)) });
   }
   refresh = async () => {
-    if (!this.canManage || this.state.busy || (this.state.pending && !this.state.pending.expired)) return;
-    this.update({ busy: true, comparisonLoaded: false });
+    if (!this.canManage || this.state.busy || (this.state.pending && !this.needsComparison)) return;
+    this.update({ busy: true, comparisonLoaded: false, originalResult: null });
     try {
       await this.load();
-      this.update({ notice: this.state.pending?.expired
-        ? '保持期限が切れています。元の要求と入力元・履歴を照合してください。自動では再保存しません。'
+      this.update({ notice: this.needsComparison
+        ? '元の要求が完了しているか照合してください。バッチ操作は「元の要求を照合」で確認できます。自動では再保存しません。'
         : '最新の入力元・履歴を取得しました。編集中のフォームは保持しています。' });
     } catch (error) { this.update({ notice: this.error(error) }); }
     finally { this.update({ busy: false }); }
   };
   select = async (id: string) => {
-    if (this.state.busy || this.state.form || (this.state.pending && !this.state.pending.expired) || !this.canManage) return;
-    this.update({ busy: true, comparisonLoaded: false });
+    if (this.state.busy || this.state.form || (this.state.pending && !this.needsComparison) || !this.canManage) return;
+    this.update({ busy: true, comparisonLoaded: false, originalResult: null });
     try { await this.load(id); } catch (error) { this.update({ notice: this.error(error) }); }
     finally { this.update({ busy: false }); }
   };
@@ -97,19 +121,24 @@ export class InputSourcesStore {
     await this.sendNew(`/api/v1/import-batches/${batch.id}/${action}`, 'POST', { diff_hash: batch.diff_hash }, 'batch');
   };
   private async sendNew(path: string, method: 'POST' | 'PUT', body: unknown, kind: Pending['kind']) {
-    const pending: Pending = { path, method, body: JSON.stringify(body), key: this.uuid(), kind, retryAt: 0, expired: false };
+    const batchId = kind === 'batch' ? path.split('/')[4] : null;
+    const batch = this.state.batches.find(b => b.id === batchId);
+    const sourceId = kind === 'batch' ? batch!.source_id : this.state.form?.id ?? null;
+    const pending: Pending = { path, method, body: JSON.stringify(body), key: this.uuid(), kind, retryAt: 0, expired: false, denied: false,
+      sourceId, batchId, sourceName: this.state.form?.config.name ?? this.state.sources.find(s => s.id === sourceId)?.name ?? '',
+      action: kind === 'batch' ? path.split('/').at(-1)! : method === 'POST' ? 'create source' : 'update source' };
     this.update({ pending, comparisonLoaded: false });
     await this.send(pending);
   }
   retry = async () => {
     const pending = this.state.pending;
-    if (!pending || pending.expired || this.state.busy || !this.canManage) return;
+    if (!pending || this.needsComparison || this.state.busy || !this.canManage) return;
     if (pending.retryAt > Date.now()) { this.update({ notice: '指定された待機時間の経過後に再送してください。' }); return; }
     await this.send(pending);
   };
   confirmReconciliation = () => {
-    if (!this.state.pending?.expired || !this.state.comparisonLoaded || this.state.busy || !this.canManage) return;
-    this.update({ pending: null, form: null, comparisonLoaded: false,
+    if (!this.needsComparison || !this.state.comparisonLoaded || this.state.busy || !this.auth.getSnapshot().session) return;
+    this.update({ pending: null, form: null, comparisonLoaded: false, originalResult: null,
       notice: '照合を確認しました。未送信の編集は破棄しました。必要な変更だけを最新の設定から編集してください。' });
   };
   private async send(pending: Pending) {
@@ -127,6 +156,10 @@ export class InputSourcesStore {
       if (error instanceof ApiError && error.code === 'idempotency_result_expired') {
         this.update({ pending: { ...pending, expired: true }, comparisonLoaded: false,
           notice: '結果の保持期限が切れています。操作済みの可能性があります。最新の入力元・履歴を取得して照合してください。' });
+      } else if (error instanceof ApiError && error.status === 403 && error.code !== 'csrf_invalid') {
+        this.update({ pending: { ...pending, denied: true }, comparisonLoaded: false, originalResult: null,
+          notice: '権限が不足しています。元の操作が完了している可能性があります。権限を再取得するか再認証し、元の要求を照合してください。' });
+        try { await this.auth.refreshSession(); } catch (sessionError) { this.error(sessionError); }
       } else if (error instanceof ApiError && error.status < 500 && ![401, 403, 408, 429].includes(error.status) && error.code !== 'idempotency_in_progress') {
         this.update({ pending: null, needsRefresh: error.status === 412, notice: message });
       } else {
