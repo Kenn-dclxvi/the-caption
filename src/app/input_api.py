@@ -313,7 +313,7 @@ class InputApi:
                 changed = items != old[content_key] or old["storage_state"] == "uninitialized"
                 change_id = str(uuid.uuid4()) if changed else None
                 if changed:
-                    state["document"] = {"revision": "rev_" + uuid.uuid4().hex,
+                    state["document"] = {"revision": str(uuid.uuid4()),
                                          "storage_state": "ready",
                                          "updated_at": datetime.fromtimestamp(self.clock(), timezone.utc).isoformat(),
                                          content_key: items}

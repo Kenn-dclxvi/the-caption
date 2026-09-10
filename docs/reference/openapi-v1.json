@@ -75,7 +75,7 @@
                   "$ref": "#/components/schemas/MarketUnitsDocument"
                 },
                 "example": {
-                  "revision": "rev_mu_3",
+                  "revision": "45735201-5634-467f-a487-fefae44c7cc3",
                   "storage_state": "ready",
                   "updated_at": "2026-09-08T18:00:00+09:00",
                   "items": [
@@ -203,7 +203,7 @@
                   "changed": true,
                   "change_id": "00000000-0000-4000-8000-000000000050",
                   "resource": {
-                    "revision": "rev_mu_3",
+                    "revision": "45735201-5634-467f-a487-fefae44c7cc3",
                     "storage_state": "ready",
                     "updated_at": "2026-09-08T18:00:00+09:00",
                     "items": [
@@ -292,7 +292,7 @@
                   "$ref": "#/components/schemas/ExternalAssetsDocument"
                 },
                 "example": {
-                  "revision": "rev_ea_3",
+                  "revision": "fe146c8c-1863-43f8-9b37-65d17223165b",
                   "storage_state": "ready",
                   "updated_at": "2026-09-08T18:00:00+09:00",
                   "months": {
@@ -425,7 +425,7 @@
                   "changed": true,
                   "change_id": "00000000-0000-4000-8000-000000000050",
                   "resource": {
-                    "revision": "rev_ea_3",
+                    "revision": "fe146c8c-1863-43f8-9b37-65d17223165b",
                     "storage_state": "ready",
                     "updated_at": "2026-09-08T18:00:00+09:00",
                     "months": {
@@ -516,7 +516,7 @@
                   "$ref": "#/components/schemas/PortfolioBasisDocument"
                 },
                 "example": {
-                  "revision": "rev_pb_3",
+                  "revision": "629f159d-7161-4942-967c-5bac75eae9a8",
                   "storage_state": "ready",
                   "updated_at": "2026-09-08T18:00:00+09:00",
                   "months": {
@@ -631,7 +631,7 @@
                   "changed": true,
                   "change_id": "00000000-0000-4000-8000-000000000050",
                   "resource": {
-                    "revision": "rev_pb_3",
+                    "revision": "629f159d-7161-4942-967c-5bac75eae9a8",
                     "storage_state": "ready",
                     "updated_at": "2026-09-08T18:00:00+09:00",
                     "months": {
@@ -1338,8 +1338,8 @@
     "schemas": {
       "Revision": {
         "type": "string",
-        "description": "対象リソース内の不透明な版ID。GET表現または保存可能性に関係するメタデータが変わると更新される。If-Matchへ代入しない。",
-        "pattern": "^rev_[A-Za-z0-9_-]+$"
+        "description": "サーバーが自動生成する空でない不透明な版ID。形式を解釈・編集せず、同一性の比較だけに使う。変更保存で更新し、無変更保存では維持する。既存のrev_付きIDも有効。If-Matchへ代入しない。",
+        "minLength": 1
       },
       "Text": {
         "type": "string",

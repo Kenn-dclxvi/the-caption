@@ -226,8 +226,8 @@ export class MarketUnitsStore {
         dirty: false, conflict: false, needsRefresh: false,
         notice: savedRevision ? {
           tone: "success", text: document.revision === savedRevision
-            ? `Saved revision ${savedRevision}. Latest data loaded.`
-            : `Saved revision ${savedRevision}. Another change is now current (${document.revision}); latest data loaded.`
+            ? "Saved successfully. Latest data loaded."
+            : "Saved successfully. Another client's newer version is now displayed."
         } : null
       });
     } finally {
@@ -327,7 +327,7 @@ export class MarketUnitsStore {
         await this.loadDocument(result.resource.revision);
       } catch (error) {
         if (error instanceof ApiError && [401, 403].includes(error.status)) this.update({ session: null });
-        this.message(`Saved revision ${result.resource.revision}, but loading the latest data failed. Refresh to continue; do not save again.`);
+        this.message("Saved successfully, but loading the latest data failed. Refresh to continue; do not save again.");
       }
     } catch (error) {
       if (error instanceof ApiError && error.status === 412) {

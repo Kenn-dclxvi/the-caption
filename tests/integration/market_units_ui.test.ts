@@ -379,8 +379,8 @@ test('PUT success followed by failed GET keeps the committed resource and blocks
   assert.deepEqual(store.getSnapshot().document, latest);
   assert.equal(store.getSnapshot().etag, '"revision-three"');
   assert.equal(store.getSnapshot().needsRefresh, false);
-  assert.match(store.getSnapshot().notice!.text, /rev_2/);
-  assert.match(store.getSnapshot().notice!.text, /rev_3/);
+  assert.match(store.getSnapshot().notice!.text, /Another client/);
+  assert.doesNotMatch(store.getSnapshot().notice!.text, /rev_2|rev_3/);
   store.openForm(ID_A);
   assert.ok(store.getSnapshot().form);
   assert.equal(transport.remaining(), 0);
