@@ -189,6 +189,7 @@ test('browsing another source cannot reconcile the original expired batch', asyn
   assert.equal(store.getSnapshot().comparisonLoaded, true);
   store.confirmReconciliation();
   assert.equal(store.getSnapshot().pending, null);
+  assert.deepEqual(store.getSnapshot().batches, [otherBatch]);
   assert.equal(calls.filter(c => c.method !== 'GET').length, 1);
 });
 
@@ -209,5 +210,25 @@ for (const [label, reply] of [
     assert.equal(store.getSnapshot().originalResult, null);
     assert.ok(store.getSnapshot().pending);
     assert.equal(calls.filter(c => c.method !== 'GET').length, 1);
+  });
+}
+
+
+for (const status of ['committed', 'cancelled'] as const) {
+  test(`reconciliation carries ${status} into the list and prevents stale preview actions`, async () => {
+    const done = { ...batch, status, changed: status === 'committed', committed_at: '2026-09-10T00:01:00Z' };
+    const { store, calls } = await setup([new Error('lost response'),
+      json({ code: 'idempotency_result_expired' }, 409), json(done)]);
+    await store.actOnBatch(batch.id, status === 'committed' ? 'commit' : 'cancel');
+    await store.retry();
+    await store.compareOriginal();
+    assert.equal(store.getSnapshot().batches[0].status, 'preview');
+    store.confirmReconciliation();
+    assert.deepEqual(store.getSnapshot().batches, [done]);
+    assert.equal(store.getSnapshot().pending, null);
+    assert.equal(store.getSnapshot().originalResult, null);
+    await store.actOnBatch(batch.id, 'commit');
+    await store.actOnBatch(batch.id, 'cancel');
+    assert.equal(calls.filter(c => c.method !== 'GET').length, 2);
   });
 }

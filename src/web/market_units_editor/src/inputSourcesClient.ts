@@ -24,7 +24,7 @@ interface Pending {
 interface State {
   sources: InputSource[]; assets: Asset[]; batches: ImportBatch[]; selected: string | null;
   form: SourceForm | null; pending: Pending | null; busy: boolean; loaded: boolean;
-  needsRefresh: boolean; comparisonLoaded: boolean; originalResult: unknown; notice: string | null;
+  needsRefresh: boolean; comparisonLoaded: boolean; originalResult: ImportBatch | null; notice: string | null;
 }
 
 export class InputSourcesStore {
@@ -138,7 +138,11 @@ export class InputSourcesStore {
   };
   confirmReconciliation = () => {
     if (!this.needsComparison || !this.state.comparisonLoaded || this.state.busy || !this.auth.getSnapshot().session) return;
-    this.update({ pending: null, form: null, comparisonLoaded: false, originalResult: null,
+    const result = this.state.originalResult;
+    const batches = result
+      ? this.state.batches.map(batch => batch.id === result.id && batch.source_id === result.source_id ? result : batch)
+      : this.state.batches;
+    this.update({ batches, pending: null, form: null, comparisonLoaded: false, originalResult: null,
       notice: '照合を確認しました。未送信の編集は破棄しました。必要な変更だけを最新の設定から編集してください。' });
   };
   private async send(pending: Pending) {
