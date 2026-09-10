@@ -7,7 +7,6 @@
 
 import csv
 import io
-import json
 import os
 from typing import Any, Dict, List, Optional, Set
 
@@ -20,20 +19,20 @@ from src.infra.market_units_snapshot_repository import (
 )
 from src.infra.market_units_input_repository import locked_market_units_csv
 from src.lib.atomic_write import atomic_write_json
+from src.infra.monthly_input_repository import MonthlyInputRepository
 
 
 class CanonicalLedgerInputRepository:
 
     def read_external_assets(self, path: str) -> Any:
         # 欠落と不正の区別は呼び出し側が行うため、例外はそのまま送出する。
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        value = MonthlyInputRepository(path, "external-assets").read_legacy()
+        if value is None:
+            raise FileNotFoundError(path)
+        return value
 
     def read_portfolio_basis(self, path: str) -> Optional[Any]:
-        if not os.path.exists(path):
-            return None
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        return MonthlyInputRepository(path, "portfolio-basis").read_legacy()
 
     def resolve_snapshot_path(self, target_date: str, snapshot_dir: Optional[str]) -> str:
         return snapshot_path(target_date, snapshot_dir)

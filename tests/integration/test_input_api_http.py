@@ -356,16 +356,42 @@ def test_http_legacy_resources_require_auth_csrf_and_current_permission(http_api
                    403, "csrf_invalid")
     assert not stored_path.exists()
     authorized = {**cookie, "X-CSRF-Token": logged_in["body"]["csrf_token"]}
-    saved = http_api.request("POST", path=path, body=payload, headers=authorized, token=None)
+    rejected = http_api.request("POST", path=path, body=payload, headers=authorized, token=None)
+    assert_problem(rejected, 428, "client_upgrade_required")
+    assert not stored_path.exists()
+
+
+@pytest.mark.parametrize("resource", ["external-assets", "portfolio-basis"])
+def test_http_monthly_api_save_replay_csrf_and_legacy_read(http_api, resource):
+    path = f"/api/v1/{resource}"
+    assert_problem(http_api.request(path=path, token=None), 401, "authentication_required")
+    initial = http_api.request(path=path)
+    assert initial["status"] == 200 and initial["body"]["storage_state"] == "uninitialized"
+    row = ({"entry_id": None, "category": "CASH_EXTERNAL", "amount": EXACT_UNITS, "name": ""}
+           if resource == "external-assets" else {"entry_id": None, "total_acquisition_cost_jpy": EXACT_UNITS})
+    payload = {"months": {"default": {"items": [row]} if resource == "external-assets" else row}, "clear_all": False}
+    key = str(uuid4())
+    headers = {"If-Match": initial["headers"]["etag"], "Idempotency-Key": key}
+    logged_in, cookie = http_api.login()
+    assert_problem(http_api.request("PUT", path=path, body=payload, headers={**headers, **cookie}, token=None), 403, "csrf_invalid")
+    saved = http_api.request("PUT", path=path, body=payload,
+                            headers={**headers, **cookie, "X-CSRF-Token": logged_in["body"]["csrf_token"]}, token=None)
     assert saved["status"] == 200, saved
-    assert saved["headers"]["cache-control"] == "no-store"
-    assert http_api.request(path=path, headers=cookie, token=None)["body"] == payload
-    original = stored_path.read_bytes()
+    assert "etag" not in saved["headers"] and "last-modified" not in saved["headers"]
+    assert EXACT_UNITS in json.dumps(saved["body"])
+    legacy = http_api.request(path=f"/api/{resource}")
+    assert legacy["status"] == 200 and EXACT_UNITS in json.dumps(legacy["body"])
+    assert "entry_id" not in json.dumps(legacy["body"])
+    http_api.stop()
+    http_api.start()
+    replay = http_api.request("PUT", path=path, body=payload, headers=headers)
+    assert replay["status"] == 200 and replay["body"] == saved["body"]
+    assert replay["headers"]["idempotency-replayed"] == "true"
+    assert_problem(http_api.request("PUT", path=path, body=payload,
+                   headers={**headers, "Idempotency-Key": str(uuid4())}), 412, "revision_mismatch")
     http_api.credentials["tokens"][0]["permissions"].remove(f"{resource}:replace")
     http_api.save_credentials()
-    assert_problem(http_api.request("POST", path=path, body=payload, headers=authorized, token=None),
-                   403, "permission_denied")
-    assert stored_path.read_bytes() == original
+    assert_problem(http_api.request("PUT", path=path, body=payload, headers=headers), 403, "permission_denied")
 
 
 @pytest.mark.parametrize(("body", "content_type", "status", "code"), [
@@ -386,3 +412,20 @@ def test_http_transport_errors_preserve_data_and_allow_corrected_request(http_ap
     assert http_api.csv_path.read_bytes() == original
     corrected = http_api.put(replacement(initial["body"]), initial["headers"]["etag"], key=key)
     assert corrected["status"] == 200, corrected
+
+
+@pytest.mark.parametrize("resource", ["external-assets", "portfolio-basis"])
+def test_http_monthly_input_root_does_not_follow_a_csv_file_symlink(http_api, tmp_path, resource):
+    http_api.stop()
+    target = tmp_path / "elsewhere/market_units.csv"
+    target.parent.mkdir()
+    http_api.csv_path.replace(target)
+    http_api.csv_path.symlink_to(target)
+    record = {"items": [{"category": "CASH_EXTERNAL", "amount": "123", "name": ""}]} if resource == "external-assets" else {"total_acquisition_cost_jpy": "123"}
+    (http_api.data_dir / (resource.replace("-", "_") + ".json")).write_text(json.dumps({"default": record}))
+    http_api.start()
+    result = http_api.request(path=f"/api/v1/{resource}")
+    assert result["status"] == 200, result
+    assert result["body"]["storage_state"] == "ready"
+    saved = result["body"]["months"]["default"]
+    assert (saved["items"][0]["amount"] if resource == "external-assets" else saved["total_acquisition_cost_jpy"]) == "123"

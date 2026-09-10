@@ -1,6 +1,6 @@
-# Market Units API の起動と利用
+# 入力API（Market Units / External Assets / Portfolio Basis）の起動と利用
 
-2026-09-08時点では、Market UnitsのGET/PUT、入力定義、health、WebUIのセッション認証を実装している。External Assets / Portfolio Basisのv1 APIとprivate自動入力は後続段階。[API契約](../reference/api-v1.md)と[分離設計](../adr/ADR-0008-caption-api-and-private-importer.md)を参照する。
+2026-09-08時点では、3リソースのGET/PUT、入力定義、health、WebUIのセッション認証を実装している。汎用取込APIとprivate自動入力は後続段階。[API契約](../reference/api-v1.md)と[分離設計](../adr/ADR-0008-caption-api-and-private-importer.md)を参照する。
 
 ## 個人利用：ログイン不要のWebUI
 
@@ -34,7 +34,9 @@ export CAPTION_API_CREDENTIALS_FILE="$HOME/.config/the-caption/api-credentials.j
 
 既定の開発URLは `http://127.0.0.1:3101`。アクセストークン欄でログインする。ブラウザはtokenをlocalStorage/sessionStorageへ保存せず、認証後はHttpOnly・SameSite=Strictのcookieを使う。HTTPSではSecureも付く。更新にはセッションごとのCSRF tokenを付ける。sessionの上限は8時間と元tokenの有効期限の短い方で、server再起動後は再ログインする。
 
-認証ファイル未設定・破損時は503で停止する。HTTP入口は既存Express、認証・Market Units保存はprivate stdio接続の常駐Python workerが担当する。workerを直接ネットワーク公開しない。Pythonはリポジトリの `.venv/bin/python` を優先し、`CAPTION_API_PYTHON` で明示指定できる。
+認証ファイル未設定・破損時は503で停止する。HTTP入口は既存Express、認証・3リソースの保存はprivate stdio接続の常駐Python workerが担当する。workerを直接ネットワーク公開しない。Pythonはリポジトリの `.venv/bin/python` を優先し、`CAPTION_API_PYTHON` で明示指定できる。
+
+`run.sh` はCookieの名前空間を起動プロファイルから設定する。未設定・空文字なら本番は `prd`、開発は `dev` となり、同じブラウザでもCookieが衝突しない。独自の名前空間は `CAPTION_API_SESSION_NAMESPACE` で明示できる。複数環境を併用するときは異なる値を使う。
 
 新規・変更する非空の価格CSV URLにはHTTPSと許可hostnameが必要。取得先を確認したうえで `CAPTION_API_PRICE_HOSTS` にカンマ区切りの正確なhostnameを設定して起動する。未設定では非空URLの新規設定・変更を拒否する。空文字への変更と、既存行の未変更URLは許可する。API保存自体ではURLを取得しない。
 
@@ -53,6 +55,16 @@ Bearerとsession cookieを業務APIへ同時に送らない。ブラウザ初期
 
 全件削除は `items=[]` と `clear_all=true` を指定する。WebUIも全消去を確認してから同じAPIへ送る。
 
+### 月別入力の保存
+
+External Assetsは `/api/v1/external-assets`、Portfolio Basisは `/api/v1/portfolio-basis` で同じGET→If-Match付きPUT→GETの手順を使う。PUT本文は `months` と `clear_all` のみ。新規行の `entry_id` はnull、既存行のIDは月移動でも保持し、金額は10進文字列とする。
+
+- 外部資産の例: `{"months":{"default":{"items":[{"entry_id":null,"category":"CASH_EXTERNAL","amount":"100.25","name":""}]}},"clear_all":false}`。nameは空文字も可。既存の空月 `{"items":[]}` はdefaultを抑止するため、そのまま保持する。
+- 取得原価の例: `{"months":{"2026-09":{"entry_id":null,"total_acquisition_cost_jpy":"1000.25"}},"clear_all":false}`。金額は正数。月の移動では移動元IDを保持し、置換される移動先のIDと旧月は本文から除く。
+- 全消去は `clear_all=true` と各リソースの `:clear` 権限が必要。外部資産は空月だけを残した場合も全消去扱いになる。
+
+WebUIは3画面とも同じAPIを使用する。Save Entryは一覧の下書きに反映し、Save to Serverで保存する。保存中・結果不明・保存後GET失敗の間は新しい保存を抑止する。競合時は下書きをコピーしてからRefreshし、結果不明時はRetry Same Requestを使う。再認証でも下書きと未適用フォームは維持する。Refreshや保存で古くなったフォームは、コピーしてCancel後に開き直す。
+
 ## 4. 既存入力と保存管理
 
 既存の有効なCSVを最初に読む際、CSVを書き直さず安定IDと管理情報を登録する。既存CSVの追加列をIDに紐付けて保持する。新APIの制約に合わない既存入力は503とし、切捨てやゼロ化で移行しない。実データへの適合は導入時に確認する。
@@ -61,7 +73,9 @@ CSVと隣接する `.market_units_api/<CSVファイル名>/` には安定ID、re
 
 登録後のCSV手編集、ファイル消失、管理情報破損は503で検出する。管理情報を削除して新規入力として再開せず、保持したCSV・管理情報・バックアップをもとに復旧する。手編集の再取込用管理コマンドはこの段階では未実装。
 
-保存は現在の入力を更新する。既存の日次snapshotの上書き、過去日の埋戻し、評価・レポート実行は起動しない。旧 `POST /api/funds` は428となるため、古いWebUI/clientを更新する。External Assets / Portfolio Basisは当面、認証・CSRF付きの旧GET/POSTを使う。安定ID・ETag・再送・journalの保証は、この2リソースにはまだ適用されない。
+External Assets / Portfolio Basisは、各JSONに隣接する `.monthly_inputs_api/<JSONファイル名>/` に同様の管理情報を保持する。JSONと管理情報を一組でバックアップする。初回GETでは元JSONのbytesを変えずIDを登録し、以後の変更・欠落を検出する。金額はJSON内でも10進文字列として保存する。日次readerは同じロックとjournal復旧を通り、既存domainの数値変換・月選択の契約を維持する。不正な旧入力・未知の項目は503とし、黙って切捨てない。
+
+保存は現在の入力を更新する。既存の日次snapshotの上書き、過去日の埋戻し、評価・レポート実行は起動しない。旧 `POST /api/funds`、`POST /api/external-assets`、`POST /api/portfolio-basis` は428となるため、古いWebUI/clientを更新する。各PUTは1リソース単位の保存であり、3回のPUTを跨ぐ原子性は提供しない。
 
 ## 5. 一覧・失効・更新
 

@@ -1,23 +1,6 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { EMPTY_FUND, formatUnits, MarketUnitsStore } from "./marketUnitsClient";
-
-interface ExternalAssetItem {
-  category: string;
-  amount: number;
-  name: string;
-}
-
-interface ExternalAssetsRecord {
-  items: ExternalAssetItem[];
-}
-
-type ExternalAssetsMap = Record<string, ExternalAssetsRecord>;
-
-interface PortfolioBasisRecord {
-  total_acquisition_cost_jpy: number;
-}
-
-type PortfolioBasisMap = Record<string, PortfolioBasisRecord>;
+import { MonthlyInputsStore, type MonthlyDraft } from "./monthlyInputsClient";
 
 interface ExternalAssetFormData {
   month: string;
@@ -76,29 +59,29 @@ export default function App() {
   const canReplaceFunds = !!fundState.session?.permissions.includes("market-units:replace");
   const formIsStale = !!fundState.form && fundState.form.epoch !== fundState.epoch;
 
-  const externalAssetsInitialized = useRef(false);
-  const [externalAssets, setExternalAssetsValue] = useState<ExternalAssetsMap>({});
-  const setExternalAssets = (value: React.SetStateAction<ExternalAssetsMap>) => {
-    externalAssetsInitialized.current = true;
-    setExternalAssetsValue(value);
-  };
-  const [loadingExternalAssets, setLoadingExternalAssets] = useState(true);
-  const [savingExternalAssets, setSavingExternalAssets] = useState(false);
+  const [externalStore] = useState(() => new MonthlyInputsStore("external-assets", fundStore));
+  const [basisStore] = useState(() => new MonthlyInputsStore("portfolio-basis", fundStore));
+  const externalState = useSyncExternalStore(externalStore.subscribe, externalStore.getSnapshot);
+  const basisState = useSyncExternalStore(basisStore.subscribe, basisStore.getSnapshot);
   const [externalView, setExternalView] = useState<"list" | "form">("list");
-  const [editingExternalId, setEditingExternalId] = useState<string | null>(null);
-  const [externalFormData, setExternalFormData] = useState<ExternalAssetFormData>(EMPTY_ASSET);
-
-  const portfolioBasisInitialized = useRef(false);
-  const [portfolioBasis, setPortfolioBasisValue] = useState<PortfolioBasisMap>({});
-  const setPortfolioBasis = (value: React.SetStateAction<PortfolioBasisMap>) => {
-    portfolioBasisInitialized.current = true;
-    setPortfolioBasisValue(value);
-  };
-  const [loadingPortfolioBasis, setLoadingPortfolioBasis] = useState(true);
-  const [savingPortfolioBasis, setSavingPortfolioBasis] = useState(false);
   const [basisView, setBasisView] = useState<"list" | "form">("list");
-  const [editingBasisMonth, setEditingBasisMonth] = useState<string | null>(null);
-  const [basisFormData, setBasisFormData] = useState<PortfolioBasisFormData>(EMPTY_BASIS);
+  const externalFormData = externalState.form?.item ?? EMPTY_ASSET;
+  const basisFormData = basisState.form?.item ?? EMPTY_BASIS;
+  const editingExternalId = externalState.form?.targetId ?? null;
+  const editingBasisMonth = basisState.form?.targetId ?? null;
+  const setExternalFormData = (value: ExternalAssetFormData) => externalStore.updateForm(value);
+  const setBasisFormData = (value: PortfolioBasisFormData) => basisStore.updateForm(value);
+  const loadingExternalAssets = externalState.loading;
+  const savingExternalAssets = externalState.saving;
+  const loadingPortfolioBasis = basisState.loading;
+  const savingPortfolioBasis = basisState.saving;
+  const externalAssets = useMemo(() => {
+    const months: Record<string, { items: MonthlyDraft[] }> = {};
+    for (const month of externalState.emptyMonths) months[month] = { items: [] };
+    for (const row of externalState.items) { months[row.month] ??= { items: [] }; months[row.month].items.push(row); }
+    return months;
+  }, [externalState.items, externalState.emptyMonths]);
+  const portfolioBasis = useMemo(() => Object.fromEntries(basisState.items.map((row) => [row.month, row])), [basisState.items]);
 
   const monthKeys = useMemo(
     () => Object.keys(externalAssets).sort(sortMonthKeys),
@@ -109,10 +92,10 @@ export default function App() {
     () =>
       monthKeys.flatMap((month) =>
         (externalAssets[month]?.items ?? []).map((item, index) => ({
-          id: `${month}::${index}`,
+          ...item,
+          id: item.draft_id,
           month,
-          index,
-          ...item
+          index
         }))
       ),
     [externalAssets, monthKeys]
@@ -153,57 +136,20 @@ export default function App() {
     await fundStore.refresh();
   };
 
-  const fetchExternalAssets = async () => {
-    setLoadingExternalAssets(true);
-    try {
-      const res = await fetch("/api/external-assets");
-      if (!res.ok) {
-        const payload = (await res.json().catch(() => ({}))) as { error?: string; detail?: string; code?: string };
-        if (res.status === 401 || (res.status === 403 && payload.code === "csrf_invalid")) fundStore.requireSignIn();
-        throw new Error(payload.detail || payload.error || "Failed to fetch external assets." );
-      }
-      const data = (await res.json()) as ExternalAssetsMap;
-      setExternalAssets(data);
-      setNotice(null);
-    } catch (err) {
-      console.error("Failed to fetch external assets:", err);
-      setNotice({ tone: "error", text: err instanceof Error ? err.message : "Failed to fetch external assets." });
-    } finally {
-      setLoadingExternalAssets(false);
-    }
+  const refreshMonthly = async (store: MonthlyInputsStore) => {
+    const { dirty, reconciliation } = store.getSnapshot();
+    if (dirty && !reconciliation && !window.confirm("Refresh will replace the list draft. Copy any edits you want to keep first. Continue?")) return;
+    await store.refresh();
   };
+  const fetchExternalAssets = () => refreshMonthly(externalStore);
+  const fetchPortfolioBasis = () => refreshMonthly(basisStore);
 
-  const fetchPortfolioBasis = async () => {
-    setLoadingPortfolioBasis(true);
-    try {
-      const res = await fetch("/api/portfolio-basis");
-      if (!res.ok) {
-        const payload = (await res.json().catch(() => ({}))) as { error?: string; detail?: string; code?: string };
-        if (res.status === 401 || (res.status === 403 && payload.code === "csrf_invalid")) fundStore.requireSignIn();
-        throw new Error(payload.detail || payload.error || "Failed to fetch portfolio basis.");
-      }
-      const data = (await res.json()) as PortfolioBasisMap;
-      setPortfolioBasis(data);
-      setNotice(null);
-    } catch (err) {
-      console.error("Failed to fetch portfolio basis:", err);
-      setNotice({ tone: "error", text: err instanceof Error ? err.message : "Failed to fetch portfolio basis." });
-    } finally {
-      setLoadingPortfolioBasis(false);
-    }
-  };
-
-  useEffect(() => {
-    void fundStore.initialize();
-  }, [fundStore]);
-
+  useEffect(() => { void fundStore.initialize(); }, [fundStore]);
   useEffect(() => {
     if (!fundState.session) return;
-    // Reauthentication changes credentials, not the user's current draft.
-    // A successful load or a local edit initializes each legacy resource.
-    if (!externalAssetsInitialized.current) void fetchExternalAssets();
-    if (!portfolioBasisInitialized.current) void fetchPortfolioBasis();
-  }, [fundState.session]);
+    void externalStore.initialize();
+    void basisStore.initialize();
+  }, [fundState.session, externalStore, basisStore]);
 
   const handleOpenFundForm = (index: number | null = null) => {
     fundStore.openForm(index === null ? undefined : funds[index]?.draft_id);
@@ -242,241 +188,34 @@ export default function App() {
     }
   };
 
-  const handleOpenExternalForm = (entryId: string | null = null) => {
-    if (entryId !== null) {
-      const entry = externalEntries.find((currentEntry) => currentEntry.id === entryId);
-      if (!entry) {
-        setNotice({ tone: "error", text: "External asset entry not found." });
-        return;
-      }
-      setEditingExternalId(entryId);
-      setExternalFormData({
-        month: entry.month,
-        category: entry.category,
-        amount: String(entry.amount),
-        name: entry.name
-      });
-    } else {
-      setEditingExternalId(null);
-      setExternalFormData({
-        ...EMPTY_ASSET,
-        month: monthKeys.find((key) => key !== "default") ?? "default"
-      });
-    }
-    setNotice(null);
-    setExternalView("form");
+  const handleOpenExternalForm = (id: string | null = null) => {
+    externalStore.openForm(id ?? undefined);
+    if (externalStore.getSnapshot().form) setExternalView("form");
   };
-
-  const handleSaveExternalForm = (e: React.FormEvent) => {
-    e.preventDefault();
-
-    const month = externalFormData.month.trim();
-    const category = externalFormData.category.trim();
-    const name = externalFormData.name.trim();
-    const amount = Number(externalFormData.amount);
-
-    if (!month) {
-      setNotice({ tone: "error", text: "Month key is required." });
-      return;
-    }
-    if (month !== "default" && !/^\d{4}-\d{2}$/.test(month)) {
-      setNotice({ tone: "error", text: "Month key must be YYYY-MM or default." });
-      return;
-    }
-    if (!category) {
-      setNotice({ tone: "error", text: "Category is required." });
-      return;
-    }
-    if (!name) {
-      setNotice({ tone: "error", text: "Name is required." });
-      return;
-    }
-    if (!Number.isFinite(amount)) {
-      setNotice({ tone: "error", text: "Amount must be numeric." });
-      return;
-    }
-
-    const nextAssets: ExternalAssetsMap = structuredClone(externalAssets);
-
-    if (editingExternalId) {
-      const [sourceMonth, sourceIndexRaw] = editingExternalId.split("::");
-      const sourceIndex = Number(sourceIndexRaw);
-      const sourceItems = [...(nextAssets[sourceMonth]?.items ?? [])];
-      if (!Number.isInteger(sourceIndex) || !sourceItems[sourceIndex]) {
-        setNotice({ tone: "error", text: "External asset entry not found." });
-        return;
-      }
-      sourceItems.splice(sourceIndex, 1);
-      if (sourceItems.length > 0) {
-        nextAssets[sourceMonth] = { items: sourceItems };
-      } else {
-        delete nextAssets[sourceMonth];
-      }
-    }
-
-    const targetItems = [...(nextAssets[month]?.items ?? [])];
-    targetItems.push({ category, amount, name });
-    nextAssets[month] = { items: targetItems };
-
-    const sortedAssets: ExternalAssetsMap = {};
-    for (const key of Object.keys(nextAssets).sort(sortMonthKeys)) {
-      sortedAssets[key] = { items: nextAssets[key].items };
-    }
-
-    setExternalAssets(sortedAssets);
-    setExternalView("list");
-    setEditingExternalId(null);
-    setNotice({
-      tone: "success",
-      text: editingExternalId ? "External asset updated locally." : "External asset added locally."
-    });
+  const handleSaveExternalForm = (event: React.FormEvent) => {
+    event.preventDefault(); externalStore.applyForm();
+    if (!externalStore.getSnapshot().form) setExternalView("list");
   };
-
-  const handleDeleteExternal = (entryId: string) => {
-    const [month, sourceIndexRaw] = entryId.split("::");
-    const sourceIndex = Number(sourceIndexRaw);
-    if (!month || !Number.isInteger(sourceIndex)) {
-      setNotice({ tone: "error", text: "External asset entry not found." });
-      return;
-    }
-
-    const nextAssets: ExternalAssetsMap = structuredClone(externalAssets);
-    const sourceItems = [...(nextAssets[month]?.items ?? [])];
-    if (!sourceItems[sourceIndex]) {
-      setNotice({ tone: "error", text: "External asset entry not found." });
-      return;
-    }
-
-    sourceItems.splice(sourceIndex, 1);
-    if (sourceItems.length > 0) {
-      nextAssets[month] = { items: sourceItems };
-    } else {
-      delete nextAssets[month];
-    }
-
-    setExternalAssets(nextAssets);
-    setNotice({ tone: "info", text: "External asset removed locally." });
+  const handleDeleteExternal = (id: string) => externalStore.deleteItem(id);
+  const saveMonthly = async (store: MonthlyInputsStore) => {
+    const clear = store.getSnapshot().items.length === 0;
+    if (clear && !window.confirm("Clear all entries on the server? This requires clear permission.")) return;
+    await store.save(clear);
   };
-
-  const handleSaveExternalAssets = async () => {
-    setSavingExternalAssets(true);
-    try {
-      const res = await fetch("/api/external-assets", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-CSRF-Token": fundState.session?.csrf_token ?? "" },
-        body: JSON.stringify(externalAssets)
-      });
-      if (!res.ok) {
-        const payload = (await res.json().catch(() => ({}))) as { error?: string; detail?: string; code?: string };
-        if (res.status === 401 || (res.status === 403 && payload.code === "csrf_invalid")) fundStore.requireSignIn();
-        throw new Error(payload.detail || payload.error || "Failed to save external assets.");
-      }
-      setNotice({ tone: "success", text: "Saved to data/external_assets.json." });
-    } catch (err) {
-      console.error("Error saving external assets:", err);
-      setNotice({ tone: "error", text: err instanceof Error ? err.message : "Error saving external assets." });
-    } finally {
-      setSavingExternalAssets(false);
-    }
-  };
-
+  const handleSaveExternalAssets = () => saveMonthly(externalStore);
   const handleOpenBasisForm = (month: string | null = null) => {
-    if (month !== null) {
-      const record = portfolioBasis[month];
-      if (!record) {
-        setNotice({ tone: "error", text: "Portfolio basis entry not found." });
-        return;
-      }
-      setEditingBasisMonth(month);
-      setBasisFormData({
-        month,
-        total_acquisition_cost_jpy: String(record.total_acquisition_cost_jpy)
-      });
-    } else {
-      setEditingBasisMonth(null);
-      setBasisFormData({
-        ...EMPTY_BASIS,
-        month: basisMonthKeys.find((key) => key !== "default") ?? "default"
-      });
-    }
-    setNotice(null);
-    setBasisView("form");
+    basisStore.openForm(month === null ? undefined : portfolioBasis[month]?.draft_id);
+    if (basisStore.getSnapshot().form) setBasisView("form");
   };
-
-  const handleSaveBasisForm = (e: React.FormEvent) => {
-    e.preventDefault();
-
-    const month = basisFormData.month.trim();
-    const totalAcquisitionCost = Number(basisFormData.total_acquisition_cost_jpy);
-
-    if (!month) {
-      setNotice({ tone: "error", text: "Month key is required." });
-      return;
-    }
-    if (month !== "default" && !/^\d{4}-\d{2}$/.test(month)) {
-      setNotice({ tone: "error", text: "Month key must be YYYY-MM or default." });
-      return;
-    }
-    if (!Number.isFinite(totalAcquisitionCost) || totalAcquisitionCost <= 0) {
-      setNotice({ tone: "error", text: "Total acquisition cost must be a positive number." });
-      return;
-    }
-
-    const nextBasis: PortfolioBasisMap = structuredClone(portfolioBasis);
-    if (editingBasisMonth && editingBasisMonth !== month) {
-      delete nextBasis[editingBasisMonth];
-    }
-    nextBasis[month] = { total_acquisition_cost_jpy: totalAcquisitionCost };
-
-    const sortedBasis: PortfolioBasisMap = {};
-    for (const key of Object.keys(nextBasis).sort(sortMonthKeys)) {
-      sortedBasis[key] = nextBasis[key];
-    }
-
-    setPortfolioBasis(sortedBasis);
-    setBasisView("list");
-    setEditingBasisMonth(null);
-    setNotice({
-      tone: "success",
-      text: editingBasisMonth ? "Portfolio basis updated locally." : "Portfolio basis added locally."
-    });
+  const handleSaveBasisForm = (event: React.FormEvent) => {
+    event.preventDefault(); basisStore.applyForm();
+    if (!basisStore.getSnapshot().form) setBasisView("list");
   };
-
-  const handleDeleteBasis = (month: string) => {
-    if (!portfolioBasis[month]) {
-      setNotice({ tone: "error", text: "Portfolio basis entry not found." });
-      return;
-    }
-
-    const nextBasis: PortfolioBasisMap = structuredClone(portfolioBasis);
-    delete nextBasis[month];
-    setPortfolioBasis(nextBasis);
-    setNotice({ tone: "info", text: "Portfolio basis removed locally." });
-  };
-
-  const handleSavePortfolioBasis = async () => {
-    setSavingPortfolioBasis(true);
-    try {
-      const res = await fetch("/api/portfolio-basis", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-CSRF-Token": fundState.session?.csrf_token ?? "" },
-        body: JSON.stringify(portfolioBasis)
-      });
-      if (!res.ok) {
-        const payload = (await res.json().catch(() => ({}))) as { error?: string; detail?: string; code?: string };
-        if (res.status === 401 || (res.status === 403 && payload.code === "csrf_invalid")) fundStore.requireSignIn();
-        throw new Error(payload.detail || payload.error || "Failed to save portfolio basis.");
-      }
-      setNotice({ tone: "success", text: "Saved to data/portfolio_basis.json." });
-    } catch (err) {
-      console.error("Error saving portfolio basis:", err);
-      setNotice({ tone: "error", text: err instanceof Error ? err.message : "Error saving portfolio basis." });
-    } finally {
-      setSavingPortfolioBasis(false);
-    }
-  };
-
-  const visibleNotice = (activeApp === "funds" || !fundState.session) ? fundState.notice ?? notice : notice;
+  const handleDeleteBasis = (month: string) => { if (portfolioBasis[month]) basisStore.deleteItem(portfolioBasis[month].draft_id); };
+  const handleSavePortfolioBasis = () => saveMonthly(basisStore);
+  const monthlyStore = activeApp === "external" ? externalStore : basisStore;
+  const monthlyState = activeApp === "external" ? externalState : basisState;
+  const visibleNotice = (activeApp === "funds" || !fundState.session) ? fundState.notice ?? notice : monthlyState.notice ?? notice;
   const noticeClassName =
     visibleNotice?.tone === "error"
       ? "border-red-200 bg-red-50 text-red-700"
@@ -492,36 +231,12 @@ export default function App() {
         : "data/portfolio_basis.json";
   const currentCount =
     activeApp === "funds" ? funds.length : activeApp === "external" ? externalEntries.length : basisMonthKeys.length;
-  const currentStatus =
-    activeApp === "funds"
-      ? loadingFunds
-        ? "SYNCING"
-        : savingFunds
-          ? "SAVING"
-          : !fundState.session
-            ? "SIGN IN"
-            : fundState.pending
-              ? "RESULT UNCONFIRMED"
-              : fundState.needsRefresh
-                ? "SAVED / REFRESH NEEDED"
-                : fundState.conflict
-                  ? "CONFLICT"
-                  : !fundState.etag
-                    ? "REFRESH NEEDED"
-                  : fundState.dirty
-                    ? "DRAFT"
-                    : "READY"
-      : activeApp === "external"
-        ? loadingExternalAssets
-          ? "SYNCING"
-          : savingExternalAssets
-            ? "SAVING"
-            : "READY"
-        : loadingPortfolioBasis
-          ? "SYNCING"
-          : savingPortfolioBasis
-            ? "SAVING"
-            : "READY";
+  const currentState = activeApp === "funds" ? fundState : monthlyState;
+  const currentStatus = currentState.loading ? "SYNCING" : currentState.saving ? "SAVING"
+    : !fundState.session ? "SIGN IN" : currentState.pending ? "RESULT UNCONFIRMED"
+    : activeApp !== "funds" && monthlyState.reconciliation ? "RESULT EXPIRED / COMPARE"
+    : currentState.needsRefresh ? "SAVED / REFRESH NEEDED" : currentState.conflict ? "CONFLICT"
+    : !currentState.etag ? "REFRESH NEEDED" : currentState.dirty ? "DRAFT" : "READY";
 
   return (
     <div className="min-h-screen bg-white text-[#1e293b] font-sans font-light selection:bg-[#c5a059] selection:text-white flex flex-col">
@@ -605,6 +320,33 @@ export default function App() {
           </section>
         )}
 
+        {activeApp !== "funds" && (monthlyState.pending || monthlyState.conflict || monthlyState.reconciliation) && (
+          <section className="px-4 md:px-12 py-4 space-y-4">
+            {monthlyState.pending && <button onClick={() => void monthlyStore.retry()}
+              disabled={monthlyState.saving || monthlyState.loading || !fundState.session}>[ Retry Same Request ]</button>}
+            {monthlyState.reconciliation && <>
+              <p>The save may have succeeded. Refresh loads comparison data without replacing your draft.
+                Compare below and copy any edits you want to keep before confirming.</p>
+              <details open><summary>Original request</summary>
+                <pre className="overflow-auto whitespace-pre-wrap text-xs">{monthlyState.reconciliation.request.body}</pre>
+              </details>
+              <details open><summary>Latest saved data</summary>
+                <pre className="overflow-auto whitespace-pre-wrap text-xs">{monthlyState.reconciliation.latest
+                  ? JSON.stringify(monthlyState.reconciliation.latest.months, null, 2) : "Refresh to load comparison data."}</pre>
+              </details>
+              <details><summary>Unapplied form</summary>
+                <pre className="overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(monthlyState.form?.item ?? null, null, 2)}</pre>
+              </details>
+              <button onClick={monthlyStore.confirmReconciliation}
+                disabled={!monthlyState.reconciliation.latest || monthlyState.loading || monthlyState.saving || !fundState.session}>
+                [ Comparison confirmed — use latest data and re-edit ]
+              </button>
+            </>}
+            <details><summary>Current draft (copy before refreshing)</summary>
+              <pre className="overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(monthlyStore.payload(), null, 2)}</pre>
+            </details>
+          </section>
+        )}
         <fieldset disabled={!fundState.session} className="contents">
         <div className="border-b border-[#cbd5e1] px-4 md:px-12 py-4 sticky top-[73px] z-10 bg-white/80 backdrop-blur-sm">
           <div className="max-w-7xl mx-auto flex flex-wrap gap-6 md:gap-10">
@@ -647,19 +389,21 @@ export default function App() {
               <>
                 <button
                   onClick={() => handleOpenExternalForm()}
+                  disabled={!externalStore.canEdit}
                   className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer"
                 >
                   [ Add New ]
                 </button>
                 <button
                   onClick={() => void fetchExternalAssets()}
+                  disabled={externalState.loading || externalState.saving || !!externalState.pending}
                   className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer"
                 >
                   [ Refresh ]
                 </button>
                 <button
                   onClick={() => void handleSaveExternalAssets()}
-                  disabled={savingExternalAssets}
+                  disabled={!externalStore.canEdit || externalState.conflict || (externalState.items.length === 0 && !fundState.session?.permissions.includes("external-assets:clear"))}
                   className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer disabled:opacity-30"
                 >
                   [ {savingExternalAssets ? "Saving" : "Save to Server"} ]
@@ -669,19 +413,21 @@ export default function App() {
               <>
                 <button
                   onClick={() => handleOpenBasisForm()}
+                  disabled={!basisStore.canEdit}
                   className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer"
                 >
                   [ Add New ]
                 </button>
                 <button
                   onClick={() => void fetchPortfolioBasis()}
+                  disabled={basisState.loading || basisState.saving || !!basisState.pending}
                   className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer"
                 >
                   [ Refresh ]
                 </button>
                 <button
                   onClick={() => void handleSavePortfolioBasis()}
-                  disabled={savingPortfolioBasis}
+                  disabled={!basisStore.canEdit || basisState.conflict || (basisState.items.length === 0 && !fundState.session?.permissions.includes("portfolio-basis:clear"))}
                   className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer disabled:opacity-30"
                 >
                   [ {savingPortfolioBasis ? "Saving" : "Save to Server"} ]
@@ -900,24 +646,26 @@ export default function App() {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-[#cbd5e1]/30">
-                            {(externalAssets[month]?.items ?? []).map((item, index) => {
-                              const entryId = `${month}::${index}`;
+                            {(externalAssets[month]?.items ?? []).map((item) => {
+                              const entryId = item.draft_id;
                               return (
                                 <tr key={entryId} className="hover:bg-[#f8fafc] transition-colors group">
-                                  <td className="py-6 text-[13px] tracking-[0.05em] font-light text-[#1e293b]">{item.name}</td>
+                                  <td className="py-6 text-[13px] tracking-[0.05em] font-light text-[#1e293b]">{item.name || item.category}</td>
                                   <td className="py-6 text-[13px] text-right tabular-nums tracking-[-0.02em] font-extralight text-[#1e293b] pr-12">
-                                    {item.amount.toLocaleString()}
+                                    {formatUnits(item.amount)}
                                   </td>
                                   <td className="py-6 text-[13px] text-[#64748b] uppercase tracking-[0.1em] font-light pl-4">{item.category}</td>
                                   <td className="py-6 text-right space-x-6">
                                     <button
                                       onClick={() => handleOpenExternalForm(entryId)}
+                                      disabled={!externalStore.canEdit}
                                       className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer font-light"
                                     >
                                       [ Edit ]
                                     </button>
                                     <button
                                       onClick={() => handleDeleteExternal(entryId)}
+                                      disabled={!externalStore.canEdit}
                                       className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer font-light"
                                     >
                                       [ Delete ]
@@ -941,9 +689,11 @@ export default function App() {
                   </h3>
                 </header>
                 <form onSubmit={handleSaveExternalForm} className="space-y-10">
+                  {externalState.form && externalState.form.epoch !== externalState.epoch && <p role="alert">This form belongs to an older version. Copy your edits, cancel, and reopen the current entry.</p>}
                   <div className="space-y-3">
                     <label className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] block">Month Key</label>
                     <input
+                      disabled={!externalStore.canEdit}
                       className="w-full border-b border-[#cbd5e1] py-2 text-[15px] focus:outline-none focus:border-[#c5a059] transition-colors bg-transparent"
                       value={externalFormData.month}
                       onChange={(e) => setExternalFormData({ ...externalFormData, month: e.target.value })}
@@ -954,6 +704,7 @@ export default function App() {
                   <div className="space-y-3">
                     <label className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] block">Category</label>
                     <select
+                      disabled={!externalStore.canEdit}
                       className="w-full border-b border-[#cbd5e1] py-2 text-[15px] focus:outline-none focus:border-[#c5a059] transition-colors bg-transparent cursor-pointer"
                       value={externalFormData.category}
                       onChange={(e) => setExternalFormData({ ...externalFormData, category: e.target.value })}
@@ -968,7 +719,8 @@ export default function App() {
                   <div className="space-y-3">
                     <label className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] block">Amount (JPY)</label>
                     <input
-                      type="number"
+                      disabled={!externalStore.canEdit}
+                      type="text" inputMode="decimal"
                       className="w-full border-b border-[#cbd5e1] py-2 text-[15px] focus:outline-none focus:border-[#c5a059] transition-colors bg-transparent tabular-nums"
                       value={externalFormData.amount}
                       onChange={(e) => setExternalFormData({ ...externalFormData, amount: e.target.value })}
@@ -978,22 +730,24 @@ export default function App() {
                   <div className="space-y-3">
                     <label className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] block">Name</label>
                     <input
+                      disabled={!externalStore.canEdit}
                       className="w-full border-b border-[#cbd5e1] py-2 text-[15px] focus:outline-none focus:border-[#c5a059] transition-colors bg-transparent"
                       value={externalFormData.name}
                       onChange={(e) => setExternalFormData({ ...externalFormData, name: e.target.value })}
-                      required
                     />
                   </div>
                   <div className="pt-12 flex gap-10">
                     <button
                       type="submit"
+                      disabled={!externalStore.canEdit || externalState.form?.epoch !== externalState.epoch}
                       className="text-[11px] uppercase tracking-[0.2em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer font-light"
                     >
                       [ Save Entry ]
                     </button>
                     <button
                       type="button"
-                      onClick={() => setExternalView("list")}
+                      disabled={externalState.loading || externalState.saving}
+                      onClick={() => { externalStore.cancelForm(); setExternalView("list"); }}
                       className="text-[11px] uppercase tracking-[0.2em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer font-light"
                     >
                       [ Cancel ]
@@ -1027,17 +781,19 @@ export default function App() {
                           <tr key={month} className="hover:bg-[#f8fafc] transition-colors group">
                             <td className="py-6 text-[13px] tracking-[0.1em] uppercase font-light text-[#1e293b]">{month}</td>
                             <td className="py-6 text-[13px] text-right tabular-nums tracking-[-0.02em] font-extralight text-[#1e293b] pr-12">
-                              {portfolioBasis[month].total_acquisition_cost_jpy.toLocaleString()}
+                              {formatUnits(portfolioBasis[month].total_acquisition_cost_jpy)}
                             </td>
                             <td className="py-6 text-right space-x-6">
                               <button
                                 onClick={() => handleOpenBasisForm(month)}
+                                disabled={!basisStore.canEdit}
                                 className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer font-light"
                               >
                                 [ Edit ]
                               </button>
                               <button
                                 onClick={() => handleDeleteBasis(month)}
+                                disabled={!basisStore.canEdit}
                                 className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer font-light"
                               >
                                 [ Delete ]
@@ -1058,9 +814,11 @@ export default function App() {
                   </h3>
                 </header>
                 <form onSubmit={handleSaveBasisForm} className="space-y-10">
+                  {basisState.form && basisState.form.epoch !== basisState.epoch && <p role="alert">This form belongs to an older version. Copy your edits, cancel, and reopen the current entry.</p>}
                   <div className="space-y-3">
                     <label className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] block">Month Key</label>
                     <input
+                      disabled={!basisStore.canEdit}
                       className="w-full border-b border-[#cbd5e1] py-2 text-[15px] focus:outline-none focus:border-[#c5a059] transition-colors bg-transparent"
                       value={basisFormData.month}
                       onChange={(e) => setBasisFormData({ ...basisFormData, month: e.target.value })}
@@ -1071,7 +829,8 @@ export default function App() {
                   <div className="space-y-3">
                     <label className="text-[11px] uppercase tracking-[0.15em] text-[#64748b] block">Total Acquisition Cost (JPY)</label>
                     <input
-                      type="number"
+                      disabled={!basisStore.canEdit}
+                      type="text" inputMode="decimal"
                       className="w-full border-b border-[#cbd5e1] py-2 text-[15px] focus:outline-none focus:border-[#c5a059] transition-colors bg-transparent tabular-nums"
                       value={basisFormData.total_acquisition_cost_jpy}
                       onChange={(e) => setBasisFormData({ ...basisFormData, total_acquisition_cost_jpy: e.target.value })}
@@ -1081,13 +840,15 @@ export default function App() {
                   <div className="pt-12 flex gap-10">
                     <button
                       type="submit"
+                      disabled={!basisStore.canEdit || basisState.form?.epoch !== basisState.epoch}
                       className="text-[11px] uppercase tracking-[0.2em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer font-light"
                     >
                       [ Save Entry ]
                     </button>
                     <button
                       type="button"
-                      onClick={() => setBasisView("list")}
+                      disabled={basisState.loading || basisState.saving}
+                      onClick={() => { basisStore.cancelForm(); setBasisView("list"); }}
                       className="text-[11px] uppercase tracking-[0.2em] text-[#64748b] hover:text-[#1e293b] transition-colors cursor-pointer font-light"
                     >
                       [ Cancel ]
