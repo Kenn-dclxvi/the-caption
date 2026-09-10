@@ -137,7 +137,8 @@ export default function App() {
   };
 
   const refreshMonthly = async (store: MonthlyInputsStore) => {
-    if (store.getSnapshot().dirty && !window.confirm("Refresh will replace the list draft. Copy any edits you want to keep first. Continue?")) return;
+    const { dirty, reconciliation } = store.getSnapshot();
+    if (dirty && !reconciliation && !window.confirm("Refresh will replace the list draft. Copy any edits you want to keep first. Continue?")) return;
     await store.refresh();
   };
   const fetchExternalAssets = () => refreshMonthly(externalStore);
