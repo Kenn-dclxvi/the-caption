@@ -34,6 +34,7 @@ interface MonthlyState {
   saving: boolean;
   conflict: boolean;
   pending: Pending | null;
+  reconciliation: { request: Pending; latest: MonthlyDocument | null; etag: string | null } | null;
   needsRefresh: boolean;
   savedRevision: string | null;
   notice: { text: string; tone: "error" | "info" | "success" } | null;
@@ -45,7 +46,7 @@ export function sortMonthKeys(a: string, b: string) {
 export class MonthlyInputsStore {
   private state: MonthlyState = {
     document: null, items: [], emptyMonths: [], form: null, epoch: 0, etag: null, dirty: false,
-    loading: false, saving: false, conflict: false, pending: null, needsRefresh: false, savedRevision: null, notice: null
+    loading: false, saving: false, conflict: false, pending: null, reconciliation: null, needsRefresh: false, savedRevision: null, notice: null
   };
   private listeners = new Set<() => void>();
   constructor(readonly resource: MonthlyResource, private sessionStore: MarketUnitsStore,
@@ -59,7 +60,7 @@ export class MonthlyInputsStore {
   private message(text: string, tone: "error" | "info" | "success" = "error") { this.update({ notice: { text, tone } }); }
   get canEdit() {
     return !!this.sessionStore.getSnapshot().session?.permissions.includes(`${this.resource}:replace`) &&
-      !!this.state.etag && !this.state.loading && !this.state.saving && !this.state.pending && !this.state.needsRefresh;
+      !!this.state.etag && !this.state.loading && !this.state.saving && !this.state.pending && !this.state.reconciliation && !this.state.needsRefresh;
   }
   private readError(error: unknown) {
     if (error instanceof ApiError && (error.status === 401 || error.code === "csrf_invalid")) this.sessionStore.requireSignIn();
@@ -82,6 +83,11 @@ export class MonthlyInputsStore {
       const etag = response.headers.get("ETag");
       if (!etag || !/^"[^"\r\n]+"$/.test(etag)) throw new Error("A valid ETag is required before editing. Refresh to continue.");
       const document = await response.json() as MonthlyDocument;
+      if (this.state.reconciliation) {
+        this.update({ reconciliation: { ...this.state.reconciliation, latest: document, etag } });
+        this.message("Result retention expired. Compare the original request and drafts with the latest saved data, then confirm to resume editing.", "info");
+        return;
+      }
       this.update({ ...this.adopt(document), etag, dirty: false, conflict: false, needsRefresh: false,
         notice: savedRevision ? { tone: "success", text: document.revision === savedRevision
           ? "Saved successfully. Latest data loaded." : "Saved successfully. Another client's newer version is now displayed." } : null });
@@ -99,6 +105,14 @@ export class MonthlyInputsStore {
       if (this.state.needsRefresh) this.message("Saved successfully, but loading the latest data failed. Refresh to continue; do not save again.");
     }
   };
+  confirmReconciliation = () => {
+    const comparison = this.state.reconciliation;
+    if (!comparison?.latest || !comparison.etag || this.state.loading || this.state.saving ||
+        !this.sessionStore.getSnapshot().session) return;
+    this.update({ ...this.adopt(comparison.latest), etag: comparison.etag, reconciliation: null,
+      dirty: false, conflict: false, needsRefresh: false });
+    this.message("Comparison confirmed. Latest saved data loaded. Reapply any remaining changes explicitly; the old form is preserved for reference.", "info");
+  };
   openForm = (id?: string) => {
     if (!this.canEdit) return;
     const months = [...this.state.items.map((row) => row.month), ...this.state.emptyMonths].sort(sortMonthKeys);
@@ -109,7 +123,7 @@ export class MonthlyInputsStore {
   updateForm = (patch: Partial<MonthlyDraft>) => {
     if (this.canEdit && this.state.form) this.update({ form: { ...this.state.form, item: { ...this.state.form.item, ...patch } } });
   };
-  cancelForm = () => { if (!this.state.loading && !this.state.saving) this.update({ form: null }); };
+  cancelForm = () => { if (!this.state.loading && !this.state.saving && !this.state.reconciliation) this.update({ form: null }); };
   applyForm = () => {
     const form = this.state.form;
     if (!this.canEdit || !form) return;
@@ -189,6 +203,9 @@ export class MonthlyInputsStore {
       if (error instanceof ApiError && error.status === 412) {
         this.update({ pending: null, conflict: true });
         this.message("Another client changed this input. Your draft is preserved. Copy it, then Refresh and reapply changes.");
+      } else if (error instanceof ApiError && error.code === "idempotency_result_expired") {
+        this.update({ pending: null, reconciliation: { request: pending, latest: null, etag: null } });
+        this.message("Result retention expired. The save may have succeeded. Refresh to compare saved data with the preserved request and drafts before confirming; do not resend automatically.");
       } else if (error instanceof ApiError && error.status < 500 && ![401, 403, 408, 429].includes(error.status) &&
           !["idempotency_in_progress", "idempotency_result_expired"].includes(error.code)) {
         this.update({ pending: null }); this.message(error.message);

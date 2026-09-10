@@ -70,6 +70,52 @@ for (const resource of ['external-assets', 'portfolio-basis'] as const) {
     assert.equal(store.getSnapshot().pending, null);
     assert.equal(store.getSnapshot().etag, '"revision-2"');
   });
+  test(`${resource}: expired receipt permits comparison without losing drafts and requires explicit confirmation`, async () => {
+    const latest = document(resource, 'latest');
+    const { store, calls } = await setup(resource, [initial(), new Error('response lost'),
+      json({ code: 'idempotency_result_expired' }, 409), new Error('comparison GET failed'),
+      json(latest, 200, { ETag: '"latest"' }), json({ resource: latest }),
+      json(latest, 200, { ETag: '"after-save"' })]);
+    store.openForm(A); store.updateForm({ month: '2026-09' }); store.applyForm();
+    store.openForm(A); store.updateForm({ month: '2026-10' });
+    const draft = store.getSnapshot().items;
+    const form = store.getSnapshot().form;
+    await store.save();
+    const original = store.getSnapshot().pending;
+    await store.retry();
+    assert.equal(store.getSnapshot().pending, null);
+    assert.deepEqual(store.getSnapshot().reconciliation?.request, original);
+    assert.match(store.getSnapshot().notice!.text, /expired/);
+    assert.equal(store.canEdit, false);
+    store.confirmReconciliation(); await store.retry(); await store.save();
+    assert.equal(calls.length, 3);
+    await store.refresh();
+    assert.equal(store.getSnapshot().reconciliation?.latest, null);
+    store.confirmReconciliation(); await store.save();
+    assert.equal(calls.length, 4);
+    await store.refresh();
+    assert.equal(calls[4].method, 'GET');
+    assert.deepEqual(store.getSnapshot().reconciliation?.latest, latest);
+    assert.equal(store.getSnapshot().items, draft);
+    assert.equal(store.getSnapshot().form, form);
+    store.cancelForm(); store.applyForm(); store.deleteItem(A); await store.retry(); await store.save();
+    assert.equal(store.getSnapshot().form, form);
+    assert.equal(calls.length, 5);
+    store.confirmReconciliation();
+    assert.equal(store.getSnapshot().reconciliation, null);
+    assert.equal(store.canEdit, true);
+    assert.equal(calls.length, 5);
+    assert.equal(store.getSnapshot().items[0].month, 'default');
+    assert.equal(store.getSnapshot().form, form);
+    store.applyForm();
+    assert.match(store.getSnapshot().notice!.text, /older version/);
+    store.cancelForm(); store.openForm(A); store.updateForm({ month: '2026-11' }); store.applyForm();
+    await store.save();
+    assert.equal(calls[5].method, 'PUT');
+    assert.equal(calls[5].headers.get('If-Match'), '"latest"');
+    assert.notEqual(calls[5].headers.get('Idempotency-Key'), original!.key);
+    assert.ok(JSON.parse(calls[5].body!).months['2026-11']);
+  });
   test(`${resource}: conflict preserves draft and requires Refresh before saving again`, async () => {
     const { store, calls } = await setup(resource, [initial(), json({ code: 'revision_mismatch' }, 412)]);
     store.openForm(A); store.updateForm({ month: '2026-09' }); store.applyForm();

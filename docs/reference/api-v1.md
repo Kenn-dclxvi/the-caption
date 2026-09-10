@@ -239,3 +239,5 @@ Market Unitsは既存ExpressをHTTP入口とし、private stdio接続のPython a
 - [RFC 6585 428 Precondition Required](https://www.rfc-editor.org/rfc/rfc6585.html#section-3)
 - [RFC 9457 Problem Details](https://www.rfc-editor.org/rfc/rfc9457.html)
 - [ADR-0008](../adr/ADR-0008-caption-api-and-private-importer.md)
+
+月別WebUIで `idempotency_result_expired` を受けた場合は照合待ちへ移る。元の要求・一覧の下書き・未適用フォームを保持し、Refreshは比較用の最新documentだけを取得する。新規PUTと同一キーの再送は停止する。利用者が内容を比較し、残したい編集を控えたうえで明示確認すると最新documentを編集の基準へ採用する。未適用フォームは古い版として保持し、再編集・保存は利用者が明示的に行う。期限切れは未保存を意味しない。

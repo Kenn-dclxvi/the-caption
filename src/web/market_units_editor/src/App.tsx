@@ -233,6 +233,7 @@ export default function App() {
   const currentState = activeApp === "funds" ? fundState : monthlyState;
   const currentStatus = currentState.loading ? "SYNCING" : currentState.saving ? "SAVING"
     : !fundState.session ? "SIGN IN" : currentState.pending ? "RESULT UNCONFIRMED"
+    : activeApp !== "funds" && monthlyState.reconciliation ? "RESULT EXPIRED / COMPARE"
     : currentState.needsRefresh ? "SAVED / REFRESH NEEDED" : currentState.conflict ? "CONFLICT"
     : !currentState.etag ? "REFRESH NEEDED" : currentState.dirty ? "DRAFT" : "READY";
 
@@ -318,10 +319,28 @@ export default function App() {
           </section>
         )}
 
-        {activeApp !== "funds" && (monthlyState.pending || monthlyState.conflict) && (
+        {activeApp !== "funds" && (monthlyState.pending || monthlyState.conflict || monthlyState.reconciliation) && (
           <section className="px-4 md:px-12 py-4 space-y-4">
             {monthlyState.pending && <button onClick={() => void monthlyStore.retry()}
               disabled={monthlyState.saving || monthlyState.loading || !fundState.session}>[ Retry Same Request ]</button>}
+            {monthlyState.reconciliation && <>
+              <p>The save may have succeeded. Refresh loads comparison data without replacing your draft.
+                Compare below and copy any edits you want to keep before confirming.</p>
+              <details open><summary>Original request</summary>
+                <pre className="overflow-auto whitespace-pre-wrap text-xs">{monthlyState.reconciliation.request.body}</pre>
+              </details>
+              <details open><summary>Latest saved data</summary>
+                <pre className="overflow-auto whitespace-pre-wrap text-xs">{monthlyState.reconciliation.latest
+                  ? JSON.stringify(monthlyState.reconciliation.latest.months, null, 2) : "Refresh to load comparison data."}</pre>
+              </details>
+              <details><summary>Unapplied form</summary>
+                <pre className="overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(monthlyState.form?.item ?? null, null, 2)}</pre>
+              </details>
+              <button onClick={monthlyStore.confirmReconciliation}
+                disabled={!monthlyState.reconciliation.latest || monthlyState.loading || monthlyState.saving || !fundState.session}>
+                [ Comparison confirmed — use latest data and re-edit ]
+              </button>
+            </>}
             <details><summary>Current draft (copy before refreshing)</summary>
               <pre className="overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(monthlyStore.payload(), null, 2)}</pre>
             </details>
