@@ -208,6 +208,9 @@ class InputApi:
                 "max_external_entries": 5000, "max_month_keys": 1200,
                 "max_request_bytes": MAX_BODY_BYTES,
             })
+        if path.startswith(("/api/v1/input-sources", "/api/v1/import-batches")):
+            from src.app.quantity_import_api import handle as handle_import
+            return handle_import(self, principal, method, path, headers, raw)
         aliases = {"/api/funds": "market-units", "/api/external-assets": "external-assets",
                    "/api/portfolio-basis": "portfolio-basis"}
         resource = aliases.get(path, path.removeprefix("/api/v1/"))
@@ -318,6 +321,8 @@ class InputApi:
                                          "updated_at": datetime.fromtimestamp(self.clock(), timezone.utc).isoformat(),
                                          content_key: items}
                     if resource == "market-units":
+                        from src.domain.quantity_import import pause_manual_changes
+                        pause_manual_changes(state, old, state["document"])
                         state["legacy_extras"] = {k: v for k, v in state["legacy_extras"].items()
                                                   if k in {item["asset_id"] for item in items}}
                     state["changes"].append({"change_id": change_id, "subject": principal.subject,

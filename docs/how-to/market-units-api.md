@@ -1,6 +1,6 @@
 # 入力API（Market Units / External Assets / Portfolio Basis）の起動と利用
 
-2026-09-08時点では、3リソースのGET/PUT、入力定義、health、WebUIのセッション認証を実装している。汎用取込APIとprivate自動入力は後続段階。[API契約](../reference/api-v1.md)と[分離設計](../adr/ADR-0008-caption-api-and-private-importer.md)を参照する。
+2026-09-08時点では、3リソースのGET/PUT、入力定義、health、WebUIのセッション認証を実装している。[汎用数量取込API](../reference/quantity-import-api.md)を追加した。private自動入力は後続段階。[API契約](../reference/api-v1.md)と[分離設計](../adr/ADR-0008-caption-api-and-private-importer.md)を参照する。
 
 ## 個人利用：ログイン不要のWebUI
 

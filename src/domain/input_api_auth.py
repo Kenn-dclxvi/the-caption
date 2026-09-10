@@ -12,7 +12,7 @@ OWNER_PERMISSIONS = frozenset({
     "market-units:read", "market-units:replace", "market-units:clear",
     "external-assets:read", "external-assets:replace", "external-assets:clear",
     "portfolio-basis:read", "portfolio-basis:replace", "portfolio-basis:clear",
-    "inputs:schema:read",
+    "inputs:schema:read", "input-sources:manage", "imports:read", "imports:preview", "imports:commit",
 })
 
 

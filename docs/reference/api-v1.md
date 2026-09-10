@@ -8,7 +8,7 @@
 
 [ADR-0008](../adr/ADR-0008-caption-api-and-private-importer.md) の段階Aとして、3画面の全操作を API の入力・出力・権限・保存効果・失敗条件へ対応付ける。APIの実装状況と、実データ導入・運用状況は区別する。
 
-2026-09-08の実装範囲は、3リソースのGET/PUT、input-schema、healthの全8操作と3画面のWebUI移行。External Assets / Portfolio Basisにも安定ID・競合検出・再送記録・journal復旧を実装し、日次readerも同じロックと復旧処理を使う。汎用取込・private連携・実データ導入は別段階である。[起動・認証・運用手順](../how-to/market-units-api.md)を参照する。
+2026-09-08の実装範囲は、3リソースのGET/PUT、input-schema、healthの全8操作と3画面のWebUI移行。External Assets / Portfolio Basisにも安定ID・競合検出・再送記録・journal復旧を実装し、日次readerも同じロックと復旧処理を使う。汎用数量取込は[別契約](quantity-import-api.md)で追加した。private連携・実データ導入は別段階である。[起動・認証・運用手順](../how-to/market-units-api.md)を参照する。
 
 機械可読契約の正本は [OpenAPI 3.1.1](./openapi-v1.json)。本書は、JSON Schema だけでは表現しきれない状態遷移と操作対応を定める。OpenAPI の `x-common-rules` / `x-business-rules` / `x-ui-coverage` もこの契約の一部である。二つの文書が食い違う場合は実装前に修正し、都合のよい一方を採用しない。
 
@@ -227,7 +227,7 @@ External Assets / Portfolio Basis移行では、実HTTP経由の保存・再起�
 
 ## 13. 段階Bの方式と残作業
 
-Market Unitsは既存ExpressをHTTP入口とし、private stdio接続のPython application serviceで認証・保存する。既存CSVに隣接する管理情報で安定ID、revision、履歴、再送結果を保持し、プロセス間lockと永続journalで停止から復旧する。日次readerも同じlockを使用する。token/sessionと価格URLの扱いは第5・7節およびhow-toに定めた。External Assets / Portfolio BasisはJSONに隣接する `.monthly_inputs_api/<JSONファイル名>/` にID・revision・履歴・再送結果を保持し、JSONと管理情報をjournalで復旧する。既存JSONの初回GETは元ファイルを書き換えず管理情報だけを登録する。保存時も金額は10進文字列を維持し、既存の日次domainが評価用数値へ変換する。外部資産の旧flat `items` 形式はdefault入力へ対応付け、空月は保持する。残作業は実データ導入と段階Cの汎用取込APIである。
+Market Unitsは既存ExpressをHTTP入口とし、private stdio接続のPython application serviceで認証・保存する。既存CSVに隣接する管理情報で安定ID、revision、履歴、再送結果を保持し、プロセス間lockと永続journalで停止から復旧する。日次readerも同じlockを使用する。token/sessionと価格URLの扱いは第5・7節およびhow-toに定めた。External Assets / Portfolio BasisはJSONに隣接する `.monthly_inputs_api/<JSONファイル名>/` にID・revision・履歴・再送結果を保持し、JSONと管理情報をjournalで復旧する。既存JSONの初回GETは元ファイルを書き換えず管理情報だけを登録する。保存時も金額は10進文字列を維持し、既存の日次domainが評価用数値へ変換する。外部資産の旧flat `items` 形式はdefault入力へ対応付け、空月は保持する。数量限定の段階Cは[汎用数量取込API](quantity-import-api.md)を参照する。実データ導入と対象拡張は後続である。
 
 文字数・数値桁・件数・body上限は提案値であり、既存データへの事前適合検査を受入条件とする。合わない入力を切捨てたり、今回実口座データを調べて補ったりはしない。定期実行の成立条件はADR-0008の段階Eで扱う。
 
