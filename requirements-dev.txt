@@ -86,7 +86,7 @@ numpy==2.4.2
     #   exchange-calendars
     #   pandas
     #   yfinance
-openai==2.24.0
+openai==2.50.0
     # via -r requirements.in
 packaging==26.0
     # via pytest
