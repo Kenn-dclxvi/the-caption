@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { EMPTY_FUND, formatUnits, MarketUnitsStore } from "./marketUnitsClient";
+import { InputSourcesStore } from "./inputSourcesClient";
+import { InputSourcesPanel } from "./InputSourcesPanel";
 import { MonthlyInputsStore, type MonthlyDraft } from "./monthlyInputsClient";
 
 interface ExternalAssetFormData {
@@ -43,10 +45,12 @@ function sortMonthKeys(a: string, b: string): number {
 }
 
 export default function App() {
+  const [showSources, setShowSources] = useState(false);
   const [activeApp, setActiveApp] = useState<ActiveApp>("funds");
   const [notice, setNotice] = useState<{ tone: NoticeTone; text: string } | null>(null);
 
   const [fundStore] = useState(() => new MarketUnitsStore());
+  const [sourcesStore] = useState(() => new InputSourcesStore(fundStore));
   const fundState = useSyncExternalStore(fundStore.subscribe, fundStore.getSnapshot);
   const funds = fundState.items;
   const loadingFunds = fundState.loading;
@@ -247,14 +251,15 @@ export default function App() {
           <span className="tracking-[0.1em] uppercase text-[#1e293b] hidden sm:inline text-[15px]">
             The Editorial Monolith
           </span>
-          <nav className="flex gap-6 md:gap-10">
+          <nav className="flex flex-wrap gap-4 md:gap-8">
             <button
               onClick={() => {
+                setShowSources(false);
                 setActiveApp("funds");
                 setFundsView("list");
               }}
               className={`uppercase text-[11px] tracking-[0.15em] transition-all ${
-                activeApp === "funds"
+                !showSources && activeApp === "funds"
                   ? "text-[#1e293b] underline decoration-[#cbd5e1] underline-offset-[12px]"
                   : "text-[#64748b] hover:text-[#1e293b]"
               }`}
@@ -263,11 +268,12 @@ export default function App() {
             </button>
             <button
               onClick={() => {
+                setShowSources(false);
                 setActiveApp("external");
                 setExternalView("list");
               }}
               className={`uppercase text-[11px] tracking-[0.15em] transition-all ${
-                activeApp === "external"
+                !showSources && activeApp === "external"
                   ? "text-[#1e293b] underline decoration-[#cbd5e1] underline-offset-[12px]"
                   : "text-[#64748b] hover:text-[#1e293b]"
               }`}
@@ -276,17 +282,19 @@ export default function App() {
             </button>
             <button
               onClick={() => {
+                setShowSources(false);
                 setActiveApp("basis");
                 setBasisView("list");
               }}
               className={`uppercase text-[11px] tracking-[0.15em] transition-all ${
-                activeApp === "basis"
+                !showSources && activeApp === "basis"
                   ? "text-[#1e293b] underline decoration-[#cbd5e1] underline-offset-[12px]"
                   : "text-[#64748b] hover:text-[#1e293b]"
               }`}
             >
               Portfolio Basis
             </button>
+            <button onClick={() => setShowSources(true)} className={`text-[11px] tracking-[0.15em] ${showSources ? 'underline underline-offset-8' : 'text-slate-500'}`}>入力元・取込</button>
           </nav>
         </div>
         <div className="text-[11px] uppercase tracking-[0.15em] text-[#64748b]">
@@ -295,7 +303,7 @@ export default function App() {
       </header>
 
       <main className="flex-1 flex flex-col relative pb-28">
-        {visibleNotice && (
+        {(!showSources || !fundState.session) && visibleNotice && (
           <section className="px-4 md:px-12 pt-6">
             <div className="max-w-7xl mx-auto">
               <div className={`border px-5 py-4 text-[12px] tracking-[0.12em] uppercase ${noticeClassName}`}>
@@ -320,6 +328,8 @@ export default function App() {
           </section>
         )}
 
+        {showSources && <InputSourcesPanel store={sourcesStore} auth={fundStore} />}
+        {!showSources && <>
         {activeApp !== "funds" && (monthlyState.pending || monthlyState.conflict || monthlyState.reconciliation) && (
           <section className="px-4 md:px-12 py-4 space-y-4">
             {monthlyState.pending && <button onClick={() => void monthlyStore.retry()}
@@ -860,9 +870,10 @@ export default function App() {
           </div>
         </div>
         </fieldset>
+        </>}
       </main>
 
-      <footer className="fixed bottom-0 w-full border-t border-[#cbd5e1] bg-white/80 backdrop-blur-sm z-50">
+      {!showSources && <footer className="fixed bottom-0 w-full border-t border-[#cbd5e1] bg-white/80 backdrop-blur-sm z-50">
         <div className="max-w-7xl mx-auto grid grid-cols-2 md:grid-cols-4 text-[10px] uppercase tracking-[0.15em] text-[#64748b]">
           <div className="px-4 md:px-6 py-4 flex items-center gap-3">
             <span className="opacity-40">[ SYSTEM ]</span>
@@ -881,7 +892,7 @@ export default function App() {
             <span className="text-[#1e293b]">{currentStatus}</span>
           </div>
         </div>
-      </footer>
+      </footer>}
     </div>
   );
 }

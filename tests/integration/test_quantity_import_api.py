@@ -255,7 +255,8 @@ def test_worker_transport_commits_persisted_preview(imp):
     import subprocess
     import sys
     import time
-    imp.api.now = time.time()
+    # Keep the frozen clock exactly representable in the ISO timestamp round trip.
+    imp.api.now = int(time.time())
     batch = imp.preview()
     packet = {'id': 'commit', 'method': 'POST', 'path': f"/api/v1/import-batches/{batch['id']}/commit",
               'headers': {'Authorization': 'Bearer ' + IMPORT_TOKEN, 'Content-Type': 'application/json',

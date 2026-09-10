@@ -169,6 +169,10 @@ export class MarketUnitsStore {
     this.update({ session: null, sessionChecked: true });
     this.message("Your session has expired. Sign in to continue. Existing drafts remain in this tab.", "info");
   };
+  refreshSession = async () => {
+    const response = await this.request("/api/session");
+    this.update({ session: await response.json() as Session, sessionChecked: true });
+  };
   private async startSession() {
     try {
       const response = await this.request("/api/session");
