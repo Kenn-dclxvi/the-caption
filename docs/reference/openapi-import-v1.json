@@ -1,0 +1,921 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "THE CAPTION scoped quantity imports",
+    "version": "0.1.0",
+    "description": "段階Cの数量取込契約。既存3画面APIと同じgateway・認証・journalを使用する。"
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    },
+    {
+      "sessionCookie": []
+    }
+  ],
+  "paths": {
+    "/input-sources": {
+      "get": {
+        "operationId": "listInputSources",
+        "summary": "入力元設定一覧",
+        "x-required-permissions": [
+          "input-sources:manage"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "成功。Cache-Control: no-store。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "sources": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Source"
+                      }
+                    }
+                  },
+                  "required": [
+                    "sources"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem Details: 認証・権限・入力・競合・保存エラー。"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createInputSource",
+        "summary": "入力元と対象を登録",
+        "x-required-permissions": [
+          "input-sources:manage"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "成功。Cache-Control: no-store。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Source"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem Details: 認証・権限・入力・競合・保存エラー。"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceConfig"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/input-sources/{source_id}": {
+      "get": {
+        "operationId": "getInputSource",
+        "summary": "入力元設定を取得",
+        "x-required-permissions": [
+          "input-sources:manage"
+        ],
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功。Cache-Control: no-store。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Source"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem Details: 認証・権限・入力・競合・保存エラー。"
+          }
+        }
+      },
+      "put": {
+        "operationId": "replaceInputSource",
+        "summary": "対象・鮮度方針を更新し明示的に休止解除",
+        "x-required-permissions": [
+          "input-sources:manage"
+        ],
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功。Cache-Control: no-store。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Source"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem Details: 認証・権限・入力・競合・保存エラー。"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceUpdate"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/input-sources/{source_id}/positions": {
+      "get": {
+        "operationId": "getSourcePositions",
+        "summary": "許可された数量と現在の版を取得",
+        "x-required-permissions": [
+          "imports:read"
+        ],
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功。Cache-Control: no-store。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Positions"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem Details: 認証・権限・入力・競合・保存エラー。"
+          }
+        }
+      }
+    },
+    "/input-sources/{source_id}/batches": {
+      "get": {
+        "operationId": "listSourceBatches",
+        "summary": "入力元の取込履歴を取得",
+        "x-required-permissions": [
+          "imports:read"
+        ],
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功。Cache-Control: no-store。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "batches": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Batch"
+                      }
+                    }
+                  },
+                  "required": [
+                    "batches"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem Details: 認証・権限・入力・競合・保存エラー。"
+          }
+        }
+      }
+    },
+    "/import-batches": {
+      "post": {
+        "operationId": "previewQuantityImport",
+        "summary": "絶対数量の変更予定を作成",
+        "x-required-permissions": [
+          "imports:preview"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "成功。Cache-Control: no-store。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Batch"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem Details: 認証・権限・入力・競合・保存エラー。"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import-batches/{batch_id}": {
+      "get": {
+        "operationId": "getImportBatch",
+        "summary": "変更予定と確定結果を取得",
+        "x-required-permissions": [
+          "imports:read"
+        ],
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功。Cache-Control: no-store。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Batch"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem Details: 認証・権限・入力・競合・保存エラー。"
+          }
+        }
+      }
+    },
+    "/import-batches/{batch_id}/commit": {
+      "post": {
+        "operationId": "commitQuantityImport",
+        "summary": "確認済み変更予定を一括反映",
+        "x-required-permissions": [
+          "imports:commit"
+        ],
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功。Cache-Control: no-store。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Batch"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem Details: 認証・権限・入力・競合・保存エラー。"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchAction"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import-batches/{batch_id}/cancel": {
+      "post": {
+        "operationId": "cancelQuantityImport",
+        "summary": "未反映バッチを取消",
+        "x-required-permissions": [
+          "imports:commit"
+        ],
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功。Cache-Control: no-store。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Batch"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem Details: 認証・権限・入力・競合・保存エラー。"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchAction"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Target": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "quantity_unit": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "external_record_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "minItems": 1,
+            "maxItems": 100,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "asset_id",
+          "quantity_unit",
+          "external_record_ids"
+        ]
+      },
+      "SourceConfig": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "max_age_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2592000
+          },
+          "allow_unknown_as_of": {
+            "type": "boolean"
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Target"
+            },
+            "minItems": 1,
+            "maxItems": 5000
+          }
+        },
+        "required": [
+          "name",
+          "subject",
+          "enabled",
+          "max_age_seconds",
+          "allow_unknown_as_of",
+          "targets"
+        ]
+      },
+      "Source": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "max_age_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2592000
+          },
+          "allow_unknown_as_of": {
+            "type": "boolean"
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Target"
+            },
+            "minItems": 1,
+            "maxItems": 5000
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "manual_override": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "last_sequence": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "last_as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "name",
+          "subject",
+          "enabled",
+          "max_age_seconds",
+          "allow_unknown_as_of",
+          "targets",
+          "id",
+          "revision",
+          "manual_override",
+          "last_sequence",
+          "last_as_of"
+        ]
+      },
+      "SourceUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "base_source_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "config": {
+            "$ref": "#/components/schemas/SourceConfig"
+          },
+          "resume_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "base_source_revision",
+          "config",
+          "resume_ids"
+        ]
+      },
+      "Positions": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "base_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "manual_override": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "asset_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "quantity": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,17})(\\.[0-9]{1,12})?$"
+                }
+              },
+              "required": [
+                "asset_id",
+                "quantity"
+              ]
+            }
+          }
+        },
+        "required": [
+          "base_revision",
+          "source_revision",
+          "manual_override",
+          "enabled",
+          "items"
+        ]
+      },
+      "ImportItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "quantity": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,17})(\\.[0-9]{1,12})?$"
+          },
+          "quantity_unit": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "external_record_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "minItems": 1,
+            "maxItems": 100,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "asset_id",
+          "quantity",
+          "quantity_unit",
+          "external_record_ids"
+        ]
+      },
+      "ImportRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_run_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "mapping_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "base_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "collected_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "enumeration_complete": {
+            "const": true
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportItem"
+            },
+            "minItems": 1,
+            "maxItems": 5000
+          }
+        },
+        "required": [
+          "source_id",
+          "source_run_id",
+          "mapping_version",
+          "base_revision",
+          "sequence",
+          "collected_at",
+          "as_of",
+          "enumeration_complete",
+          "items"
+        ]
+      },
+      "Diff": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "before": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,17})(\\.[0-9]{1,12})?$"
+          },
+          "after": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,17})(\\.[0-9]{1,12})?$"
+          },
+          "changed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "asset_id",
+          "before",
+          "after",
+          "changed"
+        ]
+      },
+      "Batch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": [
+              "preview",
+              "committed",
+              "cancelled"
+            ]
+          },
+          "request": {
+            "$ref": "#/components/schemas/ImportRequest"
+          },
+          "diff": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Diff"
+            }
+          },
+          "diff_hash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "base_revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "result_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "committed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "change_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "source_id",
+          "source_revision",
+          "status",
+          "request",
+          "diff",
+          "diff_hash",
+          "base_revision",
+          "result_revision",
+          "committed_at",
+          "change_id",
+          "changed"
+        ]
+      },
+      "BatchAction": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "diff_hash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": [
+          "diff_hash"
+        ]
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      },
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "caption_session",
+        "description": "起動プロファイルによりcaption_session_prd/dev等へ分離。session書込みはX-CSRF-Tokenも必須。"
+      }
+    }
+  }
+}
