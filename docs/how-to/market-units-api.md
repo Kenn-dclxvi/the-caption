@@ -1,6 +1,25 @@
 # 入力API（Market Units / External Assets / Portfolio Basis）の起動と利用
 
-2026-09-08時点では、3リソースのGET/PUT、入力定義、health、WebUIのセッション認証を実装している。[汎用数量取込API](../reference/quantity-import-api.md)を追加した。private自動入力は後続段階。[API契約](../reference/api-v1.md)と[分離設計](../adr/ADR-0008-caption-api-and-private-importer.md)を参照する。
+2026-09-08時点では、3リソースのGET/PUT、入力定義、health、WebUIのセッション認証を実装している。[汎用数量取込API](../reference/quantity-import-api.md)を追加した。証券会社固有の自動入力はprivate側のクライアントで行い、本リポジトリには置かない。[API契約](../reference/api-v1.md)と[分離設計](../adr/ADR-0008-caption-api-and-private-importer.md)を参照する。
+
+## セットアップの順序と環境分離
+
+1. 本番checkout（3001）と開発checkout（3101）の入力データ・資格情報ファイルを分ける。
+2. API client用のBearer tokenを発行し、資格情報ファイルの絶対パスを起動環境へ設定する。
+3. 個人用WebUIを使う場合だけ、アクセスするoriginを明示する。
+4. 実際の起動元（手動shell / launchd）へ設定を反映し、再起動する。
+5. WebUI、認証付きAPIの読取、認証なし要求の拒否を別々に確認する。
+6. Importerは入力元とsubject・対象ID・権限を確認後に接続する。接続確認だけで定期実行や書込みを有効化しない。
+
+| 設定 | 用途 | 本番 / 開発の分離 |
+| --- | --- | --- |
+| `CAPTION_API_CREDENTIALS_FILE` | tokenのdigest・主体・権限・期限を保存したJSONの絶対パス | 別ファイル・別tokenを使う |
+| `CAPTION_PERSONAL_UI_ORIGINS` | ログイン不要にする個人用WebUIの正確なorigin | 3001 / 3101を明示し、必要な入口だけ許可 |
+| `CAPTION_API_SESSION_NAMESPACE` | ブラウザcookieの名前空間 | `prd` / `dev`（起動プロファイルの既定） |
+| `HOST` | HTTP待受アドレス | `127.0.0.1`を維持 |
+| `CAPTION_DATA_DIR` | API入力ルートの検証用切替 | 日次処理の入力先は切り替わらない |
+
+API tokenはSMTPのアプリパスワード、LLMのAPIキー、証券会社のログイン情報とは別物。個人用WebUIを有効にしても、API client用tokenの設定は省略できない。
 
 ## 個人利用：ログイン不要のWebUI
 
@@ -41,6 +60,34 @@ export CAPTION_API_CREDENTIALS_FILE="$HOME/.config/the-caption/api-credentials.j
 新規・変更する非空の価格CSV URLにはHTTPSと許可hostnameが必要。取得先を確認したうえで `CAPTION_API_PRICE_HOSTS` にカンマ区切りの正確なhostnameを設定して起動する。未設定では非空URLの新規設定・変更を拒否する。空文字への変更と、既存行の未変更URLは許可する。API保存自体ではURLを取得しない。
 
 `CAPTION_DATA_DIR` はAPI/WebUIの入力ルートを切り替える検証用設定で、未指定ならこのcheckoutの `data`。日次処理の入力先まで一括変更する設定ではない。
+
+### 本番3001の起動例
+
+本番checkoutのルートから、発行済みの資格情報ファイルを指定する。以下のDNS名は実環境の名前へ置き換える。開発の3101 originを本番へ流用しない。
+
+```bash
+export HOST=127.0.0.1
+export CAPTION_API_CREDENTIALS_FILE="$HOME/.config/the-caption/prd/api-credentials.json"
+export CAPTION_API_SESSION_NAMESPACE=prd
+export CAPTION_PERSONAL_UI_ORIGINS="https://<自分のTailscale DNS名>:3001,http://127.0.0.1:3001,http://localhost:3001"
+./run.sh collection-web-prd
+```
+
+個人用モードが不要なら `CAPTION_PERSONAL_UI_ORIGINS` を設定せず、tokenログインを使う。外部入口は個人用Tailscale Serveからloopbackへ中継し、公開インターネットへ無認証UIを露出させない。
+
+### launchdなどの常駐起動
+
+shellの `export` は既存の常駐プロセスへ反映されない。launchdではplistの `EnvironmentVariables` に上記の設定を記載し、`ProgramArguments` と `WorkingDirectory` を対象checkoutへ固定する。資格情報ファイルは絶対パスを使い、tokenそのものをplistへ書かない。plist内の `$HOME` はshellのように展開されない。設定変更後は対象サービスを再起動する。
+
+入力APIの設定は起動プロセスの環境変数からPython workerへ渡される。日次処理用 `.env.enc` のSMTP/LLM設定を変更しただけで、この設定も反映されたと扱わない。既存のplistや資格情報を置き換える際は、他の設定を保持する。
+
+### 起動後の読取確認
+
+- `GET /api/v1/health` の200は起動確認。個人用モードでは資格情報ファイルなしでも200になり得るため、API clientの認証や書込権限の証明にはならない。
+- 設定したoriginのWebUIを開き、個人用モードなら自動sessionと3画面の取得を確認する。未設定ならtokenログインを確認する。
+- API clientのBearer tokenで `GET /api/v1/market-units` と、必要な月別入力・入力元を読み取れることを確認する。
+- cookieもBearerもない業務API要求は401、権限不足は403となることを確認する。値・token・応答全体を共有ログへ出さない。
+- WebUIが予期せず認証画面になる場合は、実際の起動元のorigin設定・ポート・再起動を確認する。APIの401ではtokenの期限・失効・接続先、503では資格情報ファイルのパス・権限・形式を確認する。
 
 ## 3. API client からの保存
 
@@ -87,3 +134,18 @@ python -m src.app.entrypoints.input_api_credentials revoke \
 ```
 
 一覧は平文tokenとdigestを出力しない。各API requestで現行の有効期限・失効・権限を確認し、失効後は関連sessionと再送も拒否する。ローテーションは同じsubjectで新規作成し、利用先を切り替えて旧IDを失効する。
+
+## 6. Importer用tokenの最小権限
+
+入力元の作成・対象設定は所有者が行い、通常の数量Importerには所有者tokenを渡さない。専用subjectは入力元のsubjectと完全一致させる。
+
+```bash
+python -m src.app.entrypoints.input_api_credentials create \
+  --file "$HOME/.config/the-caption/prd/api-credentials.json" \
+  --subject fictional-importer \
+  --permissions imports:read,imports:preview,imports:commit
+```
+
+3リソースを扱うクライアントには、契約に応じて `external-assets:read,external-assets:replace,portfolio-basis:read,portfolio-basis:replace` を追加する。所有者管理・全消去権限は通常の取込には不要。数量反映は汎用取込APIで行う。発行時に一度だけ表示されるtokenは保護したクライアント設定へ保存し、資格情報JSONのdigestをBearer tokenとして使わない。
+
+入力元の登録・対象確認・preview・commit・読戻しは [数量取込手順](quantity-import.md)を参照する。認証ファイルやtokenをGit・PR・スクリーンショットへ含めない。期限前に同じsubjectで新tokenを発行し、クライアントの切替と読取成功を確認してから旧IDを失効する。
