@@ -175,6 +175,8 @@ python scripts/dev/run_shadow_ingester.py
 
 ### COLLECTION Web Editor
 `data/collection/market_units.csv` と `data/external_assets.json` をブラウザで編集するためのローカル Web UI を同梱しています。
+
+本番3001・開発3101の環境分離、API token発行、個人用WebUI、常駐起動への設定反映、Importerの最小権限は [入力APIのセットアップ手順](docs/how-to/market-units-api.md) を参照してください。
 ```bash
 npm --prefix src/web/market_units_editor install
 ./run.sh collection-web-prd
