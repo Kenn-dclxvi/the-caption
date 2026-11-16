@@ -1,0 +1,397 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "THE CAPTION Fund Price Fallback API",
+    "version": "0.1.0"
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "paths": {
+    "/fund-price-requests": {
+      "get": {
+        "operationId": "listFundPriceRequests",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "状態と保存receipt。候補受付と計算完了は別状態。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundPriceRequests"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/fund-price-requests/{request_id}": {
+      "parameters": [
+        {
+          "name": "request_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Id"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getFundPriceRequest",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "状態と保存receipt。候補受付と計算完了は別状態。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundPriceRequest"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/fund-price-requests/{request_id}/candidate": {
+      "parameters": [
+        {
+          "name": "request_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Id"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "candidateFundPriceRequest",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "状態と保存receipt。候補受付と計算完了は別状態。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundPriceRequest"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FundPriceCandidate"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          }
+        ]
+      }
+    },
+    "/fund-price-requests/{request_id}/complete": {
+      "parameters": [
+        {
+          "name": "request_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Id"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "completeFundPriceRequest",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "状態と保存receipt。候補受付と計算完了は別状態。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundPriceRequest"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "Id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "Digest": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "Amount": {
+        "type": "string",
+        "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+        "maxLength": 64
+      },
+      "FundPriceCandidate": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "asset_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "target_price_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "request_revision": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "currency": {
+            "const": "JPY"
+          },
+          "source": {
+            "const": "monex_fund_detail"
+          },
+          "retrieved_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "source_price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "source_quote_units": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "price_quote_units": {
+            "const": 10000
+          }
+        },
+        "required": [
+          "request_id",
+          "asset_id",
+          "target_price_date",
+          "request_revision",
+          "currency",
+          "source",
+          "retrieved_at",
+          "source_price",
+          "source_quote_units",
+          "price",
+          "price_quote_units"
+        ],
+        "additionalProperties": false
+      },
+      "FundPriceRequest": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "asset_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "target_price_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "request_revision": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "currency": {
+            "const": "JPY"
+          },
+          "price_quote_units": {
+            "const": 10000
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "adopted",
+              "primary"
+            ]
+          },
+          "candidate": {
+            "anyOf": [
+              {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/FundPriceCandidate"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "price": {
+                        "$ref": "#/components/schemas/Amount"
+                      },
+                      "source": {
+                        "const": "primary"
+                      }
+                    },
+                    "required": [
+                      "price",
+                      "source"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "receipt": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "$ref": "#/components/schemas/Id"
+                  },
+                  "candidate_digest": {
+                    "$ref": "#/components/schemas/Digest"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "candidate_digest"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "calculation_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "calculation_status": {
+            "enum": [
+              "waiting_for_price",
+              "ready",
+              "prepared",
+              "completed",
+              "calculation_failed",
+              "correction_required"
+            ]
+          },
+          "input_digest": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "result_digest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Digest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "request_id",
+          "asset_id",
+          "target_price_date",
+          "request_revision",
+          "currency",
+          "price_quote_units",
+          "status",
+          "candidate",
+          "receipt",
+          "calculation_date",
+          "calculation_status",
+          "input_digest",
+          "result_digest"
+        ],
+        "additionalProperties": false
+      },
+      "FundPriceRequests": {
+        "type": "object",
+        "properties": {
+          "requests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FundPriceRequest"
+            },
+            "maxItems": 5000
+          }
+        },
+        "required": [
+          "requests"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 
 OWNER_PERMISSIONS = frozenset({
+    "fund-prices:read", "fund-prices:adopt", "fund-prices:complete",
     "market-units:read", "market-units:replace", "market-units:clear",
     "external-assets:read", "external-assets:replace", "external-assets:clear",
     "portfolio-basis:read", "portfolio-basis:replace", "portfolio-basis:clear",

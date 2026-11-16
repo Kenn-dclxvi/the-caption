@@ -13,15 +13,44 @@ logger = setup_logger(__name__)
 class LedgerRepository:
     __REV: Final[str] = "Rev. 9"
 
-    def __init__(self) -> None:
+    def __init__(self, current_dir=None) -> None:
+        self.current_dir = current_dir
         logger.info(f"[{self.__REV}] Initializing LedgerRepository")
+
+    @property
+    def directory(self):
+        return self.current_dir or DIR_CURRENT
+
+    def load_for_price_fallback(self, date_str: str) -> Optional[Dict[str, Any]]:
+        """A damaged or redirected existing ledger is never treated as absent."""
+        path = os.path.join(self.directory, self.__filename_for(date_str))
+        if os.path.islink(path):
+            raise ValueError("invalid pending calculation ledger path")
+        value = self.load(date_str)
+        if value is None and os.path.lexists(path):
+            raise ValueError("existing ledger is unreadable")
+        return value
+
+    def save_for_price_fallback(self, document: Dict[str, Any], date_str: str) -> None:
+        self.save_document(document, date_str)
+        path = os.path.join(self.directory, self.__filename_for(date_str))
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
     def __filename_for(self, date_str: str) -> str:
         return f"ledger_{date_str.replace('-', '')}.json"
 
     def load(self, date_str: str) -> Optional[Dict[str, Any]]:
         filename = self.__filename_for(date_str)
-        path = os.path.join(DIR_CURRENT, filename)
+        path = os.path.join(self.directory, filename)
         if os.path.exists(path):
             try:
                 with open(path, 'r', encoding='utf-8') as f:
@@ -41,16 +70,16 @@ class LedgerRepository:
         # STAGNANT（暫定）の台帳も対象に含める。ADR-0002 は STAGNANT 中の更新を
         # 許容しており、除外すると月境界の日や月そのものが欠落する。暫定かどうかは
         # integrity_status として domain へ渡し、月次側で可視化する。
-        if not os.path.exists(DIR_CURRENT):
+        if not os.path.exists(self.directory):
             return []
         prefix = f"ledger_{year_month.replace('-', '')}"
         documents: List[MonthlyLedger] = []
         scanned = 0
-        for filename in sorted(os.listdir(DIR_CURRENT)):
+        for filename in sorted(os.listdir(self.directory)):
             if not filename.startswith(prefix) or not filename.endswith(".json"):
                 continue
             scanned += 1
-            path = os.path.join(DIR_CURRENT, filename)
+            path = os.path.join(self.directory, filename)
             try:
                 with open(path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
@@ -77,9 +106,9 @@ class LedgerRepository:
 
     def save_document(self, document: Dict[str, Any], date_str: str) -> None:
         filename = self.__filename_for(date_str)
-        save_path = os.path.join(DIR_CURRENT, filename)
+        save_path = os.path.join(self.directory, filename)
         try:
-            fd, tmp_path = tempfile.mkstemp(dir=DIR_CURRENT, suffix='.json.tmp')
+            fd, tmp_path = tempfile.mkstemp(dir=self.directory, suffix='.json.tmp')
             try:
                 with os.fdopen(fd, 'w', encoding='utf-8') as f:
                     json.dump(document, f, indent=2, ensure_ascii=False)
@@ -95,9 +124,9 @@ class LedgerRepository:
 
     def scan_dates(self) -> Set[str]:
         dates = set()
-        if not os.path.exists(DIR_CURRENT): return dates
+        if not os.path.exists(self.directory): return dates
         pattern = re.compile(r"ledger_(\d{8})\.json")
-        for filename in os.listdir(DIR_CURRENT):
+        for filename in os.listdir(self.directory):
             match = pattern.match(filename)
             if match:
                 d_str = match.group(1)

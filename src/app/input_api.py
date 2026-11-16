@@ -76,11 +76,12 @@ def strict_json(raw: str):
 class InputApi:
     def __init__(self, repository, credential_file, *, allowed_price_hosts=None,
                  clock: Callable[[], float] = time.time, requests_per_minute: int = 240, personal_origins=None,
-                 session_namespace: str = "", monthly_repositories=None):
+                 session_namespace: str = "", monthly_repositories=None, fund_price_fallback=None):
         if not isinstance(session_namespace, str) or not re.fullmatch(r"[A-Za-z0-9_-]{0,64}", session_namespace):
             raise ValueError("session_namespace must contain at most 64 ASCII letters, digits, underscores or hyphens")
         self.session_cookie_name = "caption_session" + (f"_{session_namespace}" if session_namespace else "")
         self.repository = repository
+        self.fund_price_fallback = fund_price_fallback
         self.monthly_repositories = dict(monthly_repositories or {})
         self.credential_file = credential_file
         self.allowed_price_hosts = set(allowed_price_hosts or ())
@@ -208,6 +209,9 @@ class InputApi:
                 "max_external_entries": 5000, "max_month_keys": 1200,
                 "max_request_bytes": MAX_BODY_BYTES,
             })
+        if path == "/api/v1/fund-price-requests" or path.startswith("/api/v1/fund-price-requests/"):
+            from src.app.fund_price_api import handle as handle_fund_price
+            return handle_fund_price(self, principal, method, path, headers, raw)
         if path.startswith(("/api/v1/input-sources", "/api/v1/import-batches")):
             from src.app.quantity_import_api import handle as handle_import
             return handle_import(self, principal, method, path, headers, raw)
