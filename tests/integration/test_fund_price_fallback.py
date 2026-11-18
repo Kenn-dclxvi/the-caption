@@ -113,6 +113,11 @@ def test_api_frozen_inputs_and_completion(prepared):
     result = call(api, requests[0], 'complete', {})
     assert result['status'] == 200 and result['body']['calculation_status'] == 'completed', result
     validate('FundPriceRequest', result['body'])
+    assert service.delivery_ledger('2026-11-13').target_date == '2026-11-13'
+    assert service.claim_delivery('2026-11-13')
+    assert not service.claim_delivery('2026-11-13')
+    service.record_delivery('2026-11-13')
+    assert not service.claim_delivery('2026-11-13')
     saved = service.ledger_repository.load('2026-11-13')
     funds = [a for a in saved['assets'] if a['source'] == 'MARKET_UNITS']
     assert sorted(a['units'] for a in funds) == [10000, 20000]

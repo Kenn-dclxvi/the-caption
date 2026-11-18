@@ -149,6 +149,52 @@ class FundPriceFallback:
             if all(r["status"] in {"adopted", "primary"} for r in calculation["requests"].values()):
                 calculation["status"] = "ready"
 
+    def _replay(self, calculation):
+        context = calculation["context"]
+        require(digest(context) == calculation["input_digest"], "frozen_input_digest_mismatch")
+        for r in calculation["requests"].values():
+            require(r["request_revision"] == calculation["input_digest"], "price_request_mismatch")
+            require(decimal(str(float(r["candidate"]["price"]))) == decimal(r["candidate"]["price"]),
+                    "price_precision_unsupported")
+            if r["status"] == "adopted":
+                validate_candidate(r["candidate"], r, self.clock())
+                require(r["receipt"]["candidate_digest"] == digest(r["candidate"]), "price_receipt_mismatch")
+        overlays = {r["name"]: {"date": r["target_price_date"], "price": r["candidate"]["price"]}
+                    for r in calculation["requests"].values()}
+        original = ShadowLedger.model_validate(context["shadow"])
+        timeline = FrozenTimeline(original.jp_market_date, context["us_date"])
+        ingester = UniversalIngester(**context["ingester"], timeline=timeline,
+            is_closed_fn=RecordedMarketClose(values=context["closed"]),
+            input_store=FrozenLedgerInputs(calls=context["calls"], overlays=overlays))
+        ledger = ingester.run(original.target_date, units_mode="strict", previous_records=context["previous_records"])
+        ledger = V4LedgerFinalizer(timeline).finalize(ledger)
+        ledger = ledger.model_copy(update={"generated_at": original.generated_at})
+        require(all(a.pricing_status in {"PRICED", "STATIC"} for a in ledger.assets), "other_prices_unresolved")
+        return ledger
+
+    def delivery_ledger(self, target):
+        with self.repository.transaction() as state:
+            calculation = state["calculations"].get(target)
+            if not calculation or calculation["status"] != "completed":
+                return None
+            ledger = self._replay(calculation)
+            document = ShadowLedgerAdapter().to_canonical_document(ledger)
+            require(digest(document) == calculation["result_digest"] == digest(self.load_ledger(target)),
+                    "ledger_readback_mismatch")
+            return ledger
+
+    def claim_delivery(self, target):
+        with self.repository.transaction() as state:
+            calculation = state["calculations"][target]
+            if calculation.get("delivery_status"):
+                return False
+            calculation["delivery_status"] = "smtp_result_unknown"
+            return True
+
+    def record_delivery(self, target):
+        with self.repository.transaction() as state:
+            state["calculations"][target]["delivery_status"] = "sent"
+
     def complete(self, request_id):
         # Phase 1 commits the computed document before any canonical publication.
         # Retrying phase 2 recovers a response loss with the identical document.
@@ -159,26 +205,7 @@ class FundPriceFallback:
             require(calculation["status"] in {"ready", "calculation_failed", "prepared"}, "invalid_calculation_state")
             if calculation["prepared_document"] is None:
                 try:
-                    context = calculation["context"]
-                    require(digest(context) == calculation["input_digest"], "frozen_input_digest_mismatch")
-                    for r in calculation["requests"].values():
-                        require(r["request_revision"] == calculation["input_digest"], "price_request_mismatch")
-                        require(decimal(str(float(r["candidate"]["price"]))) == decimal(r["candidate"]["price"]),
-                                "price_precision_unsupported")
-                        if r["status"] == "adopted":
-                            validate_candidate(r["candidate"], r, self.clock())
-                            require(r["receipt"]["candidate_digest"] == digest(r["candidate"]), "price_receipt_mismatch")
-                    overlays = {r["name"]: {"date": r["target_price_date"], "price": r["candidate"]["price"]}
-                                for r in calculation["requests"].values()}
-                    original = ShadowLedger.model_validate(context["shadow"])
-                    timeline = FrozenTimeline(original.jp_market_date, context["us_date"])
-                    ingester = UniversalIngester(**context["ingester"], timeline=timeline,
-                        is_closed_fn=RecordedMarketClose(values=context["closed"]),
-                        input_store=FrozenLedgerInputs(calls=context["calls"], overlays=overlays))
-                    ledger = ingester.run(original.target_date, units_mode="strict", previous_records=context["previous_records"])
-                    ledger = V4LedgerFinalizer(timeline).finalize(ledger)
-                    ledger = ledger.model_copy(update={"generated_at": original.generated_at})
-                    require(all(a.pricing_status in {"PRICED", "STATIC"} for a in ledger.assets), "other_prices_unresolved")
+                    ledger = self._replay(calculation)
                     calculation["prepared_document"] = ShadowLedgerAdapter().to_canonical_document(ledger)
                     calculation["status"] = "prepared"
                 except Exception:
