@@ -105,7 +105,9 @@ def test_bootstrap_works_with_minimal_path(tmp_path: Path) -> None:
 
     lines = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
     assert lines["in_repo"] == f"{repo_root}/.venv"
-    assert lines["python"] == f"{repo_root}/.venv/bin/python"
+    python = Path(lines["python"])
+    assert python.name == "python"
+    assert python.parent.resolve() == (repo_root / ".venv/bin").resolve()
     assert "FAKE_PIP" not in lines["pip"]
     assert "FAKE_PYTEST" not in lines["pytest"]
     assert lines["resynced"] == f"{repo_root}/.venv"

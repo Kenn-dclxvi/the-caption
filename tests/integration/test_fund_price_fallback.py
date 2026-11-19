@@ -146,13 +146,15 @@ def test_invalid_candidates_are_rejected(prepared, field, value):
 
 def test_conflicting_candidate_and_primary_recovery(prepared):
     service, requests, api, _, kwargs, *_ = prepared
-    first, second = requests
+    requests_by_asset = {request['asset_id']: request for request in requests}
+    first, second = requests_by_asset[ASSET_A], requests_by_asset[ASSET_B]
     key = str(uuid4())
     assert call(api, first, 'candidate', candidate(first), key)['status'] == 200
     assert call(api, first, 'candidate', candidate(first, '12346'), key)['status'] == 409
     Path(kwargs['history_dir'], 'FundB.csv').write_text('基準日,基準価額\n2026-11-13,14000\n')
     result = call(api, second, 'candidate', candidate(second))
     assert result['status'] == 200 and result['body']['status'] == 'primary'
+    assert result['body']['candidate'] == {'price': '14000', 'source': 'primary'}
     assert result['body']['receipt'] is None
     assert call(api, first, 'complete', {})['body']['calculation_status'] == 'completed'
 
