@@ -12,6 +12,9 @@ from src.app.input_api import InputApi, MAX_BODY_BYTES
 from src.infra.input_api_credentials import CredentialFile
 from src.infra.market_units_input_repository import MarketUnitsInputRepository
 from src.infra.monthly_input_repository import MonthlyInputRepository
+from src.app.fund_price_fallback import FundPriceFallback
+from src.infra.ledger_repository import LedgerRepository
+from src.infra.portfolio_history_repository import PortfolioHistoryRepository
 
 
 # JSON.stringify can expand each body byte into a six-byte \u00xx escape.
@@ -23,9 +26,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--csv-path", required=True)
     args = parser.parse_args()
+    ledger_root = Path(args.csv_path).absolute().parent.parent
     service = InputApi(
         MarketUnitsInputRepository(args.csv_path),
         CredentialFile(os.environ.get("CAPTION_API_CREDENTIALS_FILE")),
+        portfolio_history=PortfolioHistoryRepository(ledger_root / "portfolio_history" / "history.sqlite3"),
+        fund_price_fallback=FundPriceFallback.from_environment(LedgerRepository(Path(args.csv_path).parent.parent / "current")),
         monthly_repositories={name: MonthlyInputRepository(Path(args.csv_path).parent.parent / (name.replace("-", "_") + ".json"), name)
                               for name in ("external-assets", "portfolio-basis")},
         session_namespace=os.environ.get("CAPTION_API_SESSION_NAMESPACE", ""),

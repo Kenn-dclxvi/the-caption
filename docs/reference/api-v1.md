@@ -241,3 +241,21 @@ Market Unitsは既存ExpressをHTTP入口とし、private stdio接続のPython a
 - [ADR-0008](../adr/ADR-0008-caption-api-and-private-importer.md)
 
 月別WebUIで `idempotency_result_expired` を受けた場合は照合待ちへ移る。元の要求・一覧の下書き・未適用フォームを保持し、Refreshは比較用の最新documentだけを取得する。新規PUTと同一キーの再送は停止する。利用者が内容を比較し、残したい編集を控えたうえで明示確認すると最新documentを編集の基準へ採用する。未適用フォームは古い版として保持し、再編集・保存は利用者が明示的に行う。期限切れは未保存を意味しない。
+
+## Monex日次履歴
+
+[OpenAPI 3.1.1](./openapi-portfolio-history-v1.json)
+
+`PUT /api/v1/portfolio-history/{date}` で証券総合口座・NISA口座の観測値を日付単位で登録する。日付は日本時間の実在日を `YYYY-MM-DD` で指定する。権限は `portfolio-history:record`。本文は `application/json` で、全項目を文字列で指定する。
+
+| 項目 | 内容 |
+| --- | --- |
+| `scope` | 固定値 `securitiesGeneralAndNisa` |
+| `total_amount_jpy` | 総評価額。円の非負整数、最大18桁 |
+| `cumulative_deposits_withdrawals_jpy` | 累計入出金額。円の符号付き整数、絶対値は最大18桁 |
+| `source_sha256` | 保護領域に保存した観測元応答のSHA-256。小文字の16進数64桁 |
+| `source_received_at` | 観測元応答を受信した実時刻。タイムゾーン付き。日本時間で指定日以降、現在時刻以前 |
+
+初回登録は201。同じ内容の再送は同じreceiptを200で返す。指定日に異なる内容があれば409を返す。日次履歴は専用ストアに保存し、現在の保有数量・残高および月次入力への書込みを伴わない。
+
+`GET /api/v1/portfolio-history/{date}` で登録内容と `date`・`receipt_id`・`registered_at` を照合できる。権限は `portfolio-history:read`。未登録日は404。

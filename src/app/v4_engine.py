@@ -1,5 +1,6 @@
 import os
 import json
+from contextlib import nullcontext
 from datetime import date, datetime, timedelta
 from typing import Any, Final
 from zoneinfo import ZoneInfo
@@ -55,15 +56,25 @@ class V4PortfolioEngine:
         self.__timeline = TimelineController()
         self.__guard = GuardRail(self.__timeline)
         self.__history_updater = CollectionHistoryUpdater()
+        self.__price_inputs = None
+        self.__price_closed = None
+        if os.environ.get("CAPTION_FUND_PRICE_FALLBACK_STATE_DIR"):
+            from src.infra.frozen_ledger_inputs import FrozenLedgerInputs, RecordedMarketClose
+            self.__price_inputs = FrozenLedgerInputs(CanonicalLedgerInputRepository())
+            self.__price_closed = RecordedMarketClose(is_market_closed)
         self.__ingester = UniversalIngester(
-            is_closed_fn=is_market_closed,
-            input_store=CanonicalLedgerInputRepository(),
+            is_closed_fn=self.__price_closed or is_market_closed,
+            input_store=self.__price_inputs or CanonicalLedgerInputRepository(),
         )
         self.__adapter = ShadowLedgerAdapter()
         self.__finalizer = V4LedgerFinalizer(self.__timeline)
         self.__context_repo = ContextRepository()
         self.__daily_metrics_repo = DailyMetricsRepository()
         self.__ledger_repo = LedgerRepository()
+        self.__price_fallback = None
+        if self.__price_inputs is not None:
+            from src.app.fund_price_fallback import FundPriceFallback
+            self.__price_fallback = FundPriceFallback.from_environment(self.__ledger_repo)
         self.__market_snapshot_repo = MarketSnapshotRepository()
         self.__knowledge_mgr = KnowledgeManager()
         self.__renderer = V4ContentRenderer()
@@ -103,30 +114,58 @@ class V4PortfolioEngine:
                 logger.info("[Outcome] V4 execution inhibited by GuardRail")
                 return False
 
-            today_jst = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d")
-            ensure_units_snapshot(
-                target_date_str,
-                allow_create=target_date_str == today_jst,
-            )
+            delivery_only = os.environ.get("CAPTION_FUND_PRICE_DELIVERY_ONLY") == "1"
+            if delivery_only:
+                last_sent = SystemUtils.get_flag(LAST_SENT_FILE_CURRENT)
+                if not manual_date or (last_sent and last_sent >= target_date_str):
+                    return False
+                if self.__price_fallback is None or format_test or force_send:
+                    return False
+                finalized_ledger = self.__price_fallback.delivery_ledger(target_date_str)
+                if finalized_ledger is None:
+                    return False
+            else:
+                today_jst = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d")
+                ensure_units_snapshot(
+                    target_date_str,
+                    allow_create=target_date_str == today_jst,
+                )
 
-            us_context = self.__timeline.get_us_market_context(target_date_str)
-            trading_date = us_context.get("trading_date") or target_date_str
-            self.__history_updater.refresh(
-                target_date=target_date_str,
-                us_market_date=trading_date,
-            )
-            previous_records = self.__load_previous_ledger_records(target_date_str)
-            shadow_ledger = self.__ingester.run(
-                target_date_str,
-                units_mode="strict",
-                previous_records=previous_records,
-            )
-            finalized_ledger = self.__finalizer.finalize(shadow_ledger)
-            finalized_ledger = self.__retry_incomplete_market_pricing(
-                target_date=target_date_str,
-                us_market_date=trading_date,
-                current_ledger=finalized_ledger,
-            )
+                us_context = self.__timeline.get_us_market_context(target_date_str)
+                trading_date = us_context.get("trading_date") or target_date_str
+                self.__history_updater.refresh(
+                    target_date=target_date_str,
+                    us_market_date=trading_date,
+                )
+                if self.__price_fallback is not None and self.__price_fallback.waiting(target_date_str):
+                    self.__price_fallback.refresh_primary(target_date_str, CanonicalLedgerInputRepository())
+                    requests = self.__price_fallback.list_requests_for_date(target_date_str)
+                    if requests:
+                        self.__price_fallback.complete(requests[0]["request_id"])
+                    logger.info("[Outcome] Resumed frozen price-wait calculation; delivery remains separate.")
+                    return False
+                if self.__price_inputs is not None:
+                    self.__price_inputs.calls.clear()
+                    self.__price_closed.values.clear()
+                previous_records = self.__load_previous_ledger_records(target_date_str)
+                shadow_ledger = self.__ingester.run(
+                    target_date_str,
+                    units_mode="strict",
+                    previous_records=previous_records,
+                )
+                finalized_ledger = self.__finalizer.finalize(shadow_ledger)
+                finalized_ledger = self.__retry_incomplete_market_pricing(
+                    target_date=target_date_str,
+                    us_market_date=trading_date,
+                    current_ledger=finalized_ledger,
+                )
+                if self.__price_fallback is not None and not format_test:
+                    from src.app.fund_price_fallback import capture_engine_price_wait
+                    if capture_engine_price_wait(self.__price_fallback, finalized_ledger, self.__ingester,
+                                                 self.__price_inputs, self.__price_closed,
+                                                 previous_records, trading_date):
+                        logger.info("[Outcome] Waiting for fund prices; frozen inputs saved, finalization and delivery deferred.")
+                        return False
             if not self.__guard.should_dispatch_shadow_ledger(finalized_ledger, allow_missing=True):
                 logger.info("[Outcome] V4 execution inhibited by ShadowLedger GuardRail")
                 return False
@@ -143,7 +182,7 @@ class V4PortfolioEngine:
                 logger.info(
                     f"[Guard] Format test run; skipping canonical ledger persistence for {target_date_str}."
                 )
-            else:
+            elif not delivery_only:
                 canonical_document = self.__adapter.to_canonical_document(finalized_ledger)
                 if not self.__persist_canonical_ledger(canonical_document, target_date_str):
                     logger.error(
@@ -182,8 +221,13 @@ class V4PortfolioEngine:
                 is_provisional=is_provisional,
                 show_appraisal=show_appraisal,
             )
+            if delivery_only and not self.__price_fallback.claim_delivery(target_date_str):
+                logger.info("[Outcome] Deferred delivery already attempted.")
+                return False
             dispatched = self.__dispatch_monolithic_report(subject, html, format_test)
 
+            if delivery_only and dispatched:
+                self.__price_fallback.record_delivery(target_date_str)
             if dispatched and not format_test and not is_provisional:
                 if not self.__record_successful_dispatch(target_date_str, show_appraisal):
                     message = (
@@ -319,14 +363,16 @@ class V4PortfolioEngine:
         # STALE を含む日は STAGNANT として保存し日次連続性を欠落させないが、
         # VERIFIED へ到達した正本は確定とみなし後続実行で書き換えない。
         try:
-            existing = self.__verified_canonical_ledger(target_date)
-            if existing is not None:
-                logger.info(
-                    f"[Guard] Canonical ledger already VERIFIED for {target_date}; preserving confirmed record."
-                )
-                self.__warn_if_diverged_from_confirmed(existing, document, target_date)
-                return True
-            self.__ledger_repo.save_document(document, target_date)
+            fallback = self.__price_fallback
+            with fallback.repository.transaction() if fallback is not None else nullcontext():
+                existing = self.__verified_canonical_ledger(target_date)
+                if existing is not None:
+                    logger.info(
+                        f"[Guard] Canonical ledger already VERIFIED for {target_date}; preserving confirmed record."
+                    )
+                    self.__warn_if_diverged_from_confirmed(existing, document, target_date)
+                    return True
+                self.__ledger_repo.save_document(document, target_date)
             status = (document.get("meta") or {}).get("integrity_status")
             logger.info(f"[Outcome] V4 canonical ledger persisted: {target_date} ({status})")
             return True

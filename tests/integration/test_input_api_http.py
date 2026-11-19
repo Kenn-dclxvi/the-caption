@@ -429,3 +429,52 @@ def test_http_monthly_input_root_does_not_follow_a_csv_file_symlink(http_api, tm
     assert result["body"]["storage_state"] == "ready"
     saved = result["body"]["months"]["default"]
     assert (saved["items"][0]["amount"] if resource == "external-assets" else saved["total_acquisition_cost_jpy"]) == "123"
+
+
+def test_portfolio_history_is_date_scoped_durable_and_isolated(http_api):
+    from zoneinfo import ZoneInfo
+
+    before = {resource: http_api.request(path=f"/api/v1/{resource}") for resource in
+              ("market-units", "external-assets", "portfolio-basis")}
+    assert all(result["status"] == 200 for result in before.values())
+    now = datetime.now(timezone.utc)
+    day = (now.astimezone(ZoneInfo("Asia/Tokyo")).date() - timedelta(days=1)).isoformat()
+    path = f"/api/v1/portfolio-history/{day}"
+    payload = {
+        "scope": "securitiesGeneralAndNisa",
+        "total_amount_jpy": "123456123456123456",
+        "cumulative_deposits_withdrawals_jpy": "-987654",
+        "source_sha256": "a" * 64,
+        "source_received_at": now.isoformat(),
+    }
+
+    assert http_api.request(path=path, token=None)["status"] == 401
+    assert http_api.request("PUT", path=path, body=payload)["status"] == 403
+    http_api.credentials["tokens"][0]["permissions"] += ["portfolio-history:read", "portfolio-history:record"]
+    http_api.save_credentials()
+    assert http_api.request(path=path)["status"] == 404
+    assert http_api.request(path=path.replace(day, "2026-02-30"))["status"] == 400
+    assert http_api.request("PUT", path=path, body={**payload, "total_amount_jpy": 123})["status"] == 400
+    assert http_api.request("PUT", path=path, body={**payload, "scope": "other"})["status"] == 400
+    assert http_api.request("PUT", path=path.replace(day, "9999-12-31"), body=payload)["status"] == 400
+
+    created = http_api.request("PUT", path=path, body=payload)
+    assert created["status"] == 201
+    saved = created["body"]
+    assert saved == {**payload, "date": day, "receipt_id": saved["receipt_id"], "registered_at": saved["registered_at"]}
+    assert UUID(saved["receipt_id"]).version == 4
+
+    http_api.stop()
+    http_api.start()
+    assert http_api.request(path=path)["body"] == saved
+    replay = http_api.request("PUT", path=path, body=payload)
+    assert replay["status"] == 200
+    assert replay["body"] == saved
+    conflict = http_api.request("PUT", path=path, body={**payload, "total_amount_jpy": "123"})
+    assert conflict["status"] == 409
+    assert http_api.request(path=path)["body"] == saved
+
+    for resource, original in before.items():
+        after = http_api.request(path=f"/api/v1/{resource}")
+        assert after["body"] == original["body"]
+        assert after["headers"]["etag"] == original["headers"]["etag"]
