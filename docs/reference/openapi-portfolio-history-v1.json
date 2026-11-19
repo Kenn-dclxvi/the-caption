@@ -1,0 +1,224 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "THE CAPTION Monex日次履歴API",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/portfolio-history/{date}": {
+      "parameters": [
+        {
+          "name": "date",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getPortfolioHistory",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "browserSession": []
+          }
+        ],
+        "x-required-permissions": [
+          "portfolio-history:read"
+        ],
+        "responses": {
+          "200": {
+            "description": "日次履歴と受付記録",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordedHistory"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "未登録日"
+          },
+          "400": {
+            "description": "日付または要求が不正"
+          },
+          "401": {
+            "description": "認証が必要"
+          },
+          "403": {
+            "description": "権限不足またはCSRF検証失敗"
+          },
+          "503": {
+            "description": "日次履歴ストアが利用不能"
+          }
+        }
+      },
+      "put": {
+        "operationId": "recordPortfolioHistory",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "browserSession": []
+          }
+        ],
+        "x-required-permissions": [
+          "portfolio-history:record"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoryEntry"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "新規登録",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordedHistory"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "同じ要求の再送",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordedHistory"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "指定日に異なる日次履歴が存在"
+          },
+          "415": {
+            "description": "application/jsonが必要"
+          },
+          "400": {
+            "description": "日付または要求が不正"
+          },
+          "401": {
+            "description": "認証が必要"
+          },
+          "403": {
+            "description": "権限不足またはCSRF検証失敗"
+          },
+          "503": {
+            "description": "日次履歴ストアが利用不能"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      },
+      "browserSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "caption_session",
+        "description": "書込み時はX-CSRF-Tokenが必要。cookie名には環境別suffixを使用できる。"
+      }
+    },
+    "schemas": {
+      "HistoryEntry": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "const": "securitiesGeneralAndNisa"
+          },
+          "total_amount_jpy": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,17})$"
+          },
+          "cumulative_deposits_withdrawals_jpy": {
+            "type": "string",
+            "pattern": "^(0|-?[1-9][0-9]{0,17})$"
+          },
+          "source_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "source_received_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "scope",
+          "total_amount_jpy",
+          "cumulative_deposits_withdrawals_jpy",
+          "source_sha256",
+          "source_received_at"
+        ],
+        "additionalProperties": false
+      },
+      "RecordedHistory": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "const": "securitiesGeneralAndNisa"
+          },
+          "total_amount_jpy": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,17})$"
+          },
+          "cumulative_deposits_withdrawals_jpy": {
+            "type": "string",
+            "pattern": "^(0|-?[1-9][0-9]{0,17})$"
+          },
+          "source_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "source_received_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "date": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+          },
+          "receipt_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "registered_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "scope",
+          "total_amount_jpy",
+          "cumulative_deposits_withdrawals_jpy",
+          "source_sha256",
+          "source_received_at",
+          "date",
+          "receipt_id",
+          "registered_at"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}
