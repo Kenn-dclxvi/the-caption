@@ -51,7 +51,7 @@ def validate_candidate(value, request, now):
     }, "invalid_candidate")
     for field in ("request_id", "asset_id", "target_price_date", "request_revision", "currency", "price_quote_units"):
         require(value[field] == request[field] and type(value[field]) is type(request[field]), "price_request_mismatch")
-    require(value["source"] == "monex_fund_detail", "invalid_price_source")
+    require(value["source"] in ("monex_fund_detail", "sbi_securities_nav_history"), "invalid_price_source")
     quote = value["source_quote_units"]
     require(type(quote) is int and 0 < quote <= 9007199254740991, "invalid_price_units")
     try:

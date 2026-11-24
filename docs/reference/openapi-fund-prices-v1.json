@@ -213,7 +213,7 @@
             "const": "JPY"
           },
           "source": {
-            "const": "monex_fund_detail"
+            "enum": ["monex_fund_detail", "sbi_securities_nav_history"]
           },
           "retrieved_at": {
             "type": "string",
