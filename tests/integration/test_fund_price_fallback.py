@@ -227,3 +227,13 @@ def test_completed_receipt_rechecks_actual_canonical_file(prepared):
     assert call(api, requests[0], 'complete', {})['body']['calculation_status'] == 'completed'
     (root / 'current/ledger_20261113.json').unlink()
     assert call(api, requests[0])['body']['code'] == 'ledger_readback_mismatch'
+
+
+def test_sbi_history_candidate_is_adopted_with_original_source(prepared):
+    _, requests, api, *_ = prepared
+    request = requests[0]
+    body = candidate(request) | {"source": "sbi_securities_nav_history"}
+    validate("FundPriceCandidate", body)
+    response = call(api, request, "candidate", body)
+    assert response["status"] == 200
+    assert call(api, request)["body"]["candidate"]["source"] == "sbi_securities_nav_history"

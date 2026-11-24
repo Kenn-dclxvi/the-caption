@@ -115,9 +115,10 @@ class V4PortfolioEngine:
                 return False
 
             delivery_only = os.environ.get("CAPTION_FUND_PRICE_DELIVERY_ONLY") == "1"
+            backfill_delivery = delivery_only and os.environ.get("CAPTION_FUND_PRICE_BACKFILL_DELIVERY") == "1"
             if delivery_only:
                 last_sent = SystemUtils.get_flag(LAST_SENT_FILE_CURRENT)
-                if not manual_date or (last_sent and last_sent >= target_date_str):
+                if not manual_date or (last_sent and last_sent >= target_date_str and not backfill_delivery):
                     return False
                 if self.__price_fallback is None or format_test or force_send:
                     return False
@@ -228,7 +229,7 @@ class V4PortfolioEngine:
 
             if delivery_only and dispatched:
                 self.__price_fallback.record_delivery(target_date_str)
-            if dispatched and not format_test and not is_provisional:
+            if dispatched and not format_test and not is_provisional and not backfill_delivery:
                 if not self.__record_successful_dispatch(target_date_str, show_appraisal):
                     message = (
                         f"CompletionLock update failed after mail dispatch for {target_date_str}; "
